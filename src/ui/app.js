@@ -1017,9 +1017,12 @@ function settingsView() {
       <div class="row">
         <div>
           <div class="row-label">Диагностика</div>
-          <div class="row-hint">Соберёт версии, состояние сервисов, доступность Twitch и журнал. Без логина, токена и путей с именем пользователя</div>
+          <div class="row-hint">Соберёт версии, состояние сервисов, доступность Twitch и журнал. Без логина, токена и путей с именем пользователя<br>Файл: <code>data/profile/diagnostics/latest.txt</code></div>
         </div>
-        <button class="btn-ghost" data-action="diagnostics">Собрать отчёт</button>
+        <div style="display:flex;gap:8px">
+          <button class="btn-ghost" data-action="diagnostics-open">Открыть отчёт</button>
+          <button class="btn-ghost" data-action="diagnostics">Собрать отчёт</button>
+        </div>
       </div>
       <div class="row">
         <div>
@@ -1306,12 +1309,23 @@ const actions = {
     try {
       const report = await api.diagnostics();
       state.diagnostics = report;
-      toast('Отчёт сохранён: ' + (report?.path ?? 'data/profile/diagnostics/latest.txt'));
+      const opened = await api.diagnosticsOpen();
+      toast(opened?.ok ? 'Отчёт открыт в проводнике и скопирован в буфер' : 'Отчёт сохранён: ' + (report?.path ?? 'data/profile/diagnostics/latest.txt'));
     } catch (error) {
       toast('Диагностика: ' + error.message, 'error');
     } finally {
       state.busy.delete('diagnostics');
       render();
+    }
+  },
+
+  async 'diagnostics-open'() {
+    try {
+      const result = await api.diagnosticsOpen();
+      if (!result?.ok) toast(result?.error ?? 'Отчёт ещё не собран', 'error');
+      else toast('Отчёт открыт, текст скопирован в буфер');
+    } catch (error) {
+      toast('Диагностика: ' + error.message, 'error');
     }
   },
 

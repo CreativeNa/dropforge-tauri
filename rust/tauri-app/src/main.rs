@@ -295,6 +295,27 @@ fn version_greater(latest: &str, current: &str) -> bool {
 }
 
 #[tauri::command]
+fn diagnostics_open() -> Value {
+    let path = profile_dir().join("diagnostics").join("latest.txt");
+    if !path.exists() {
+        return json!({ "ok": false, "error": "отчёт ещё не собран" });
+    }
+    let mut explore = Command::new("explorer");
+    explore.arg(format!("/select,{}", path.display()));
+    hide_console(&mut explore);
+    let _ = explore.spawn();
+    let script = format!(
+        "Set-Clipboard -Value (Get-Content -Raw -LiteralPath '{}')",
+        path.display()
+    );
+    let mut clipboard = Command::new("powershell");
+    clipboard.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]);
+    hide_console(&mut clipboard);
+    let _ = clipboard.spawn();
+    json!({ "ok": true, "path": mask_text(&path.display().to_string()) })
+}
+
+#[tauri::command]
 fn update_check() -> Value {
     let url = format!("https://api.github.com/repos/{UPDATE_REPO}/releases/latest");
     let agent = ureq::Agent::config_builder()
@@ -2671,6 +2692,7 @@ fn main() {
             app_data_dir,
             shell_open,
             diagnostics_report,
+            diagnostics_open,
             update_check,
             update_install,
             app_quit,

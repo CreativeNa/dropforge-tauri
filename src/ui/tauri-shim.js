@@ -44,6 +44,7 @@
     openExternal: (url) => call('shell_open', { url }),
     openDataDir: () => call('app_data_dir'),
     diagnostics: () => call('diagnostics_report'),
+    diagnosticsOpen: () => call('diagnostics_open'),
     updateCheck: () => call('update_check'),
     updateInstall: (url) => call('update_install', { url }),
     quit: () => call('app_quit'),
