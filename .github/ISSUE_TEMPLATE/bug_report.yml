@@ -1,0 +1,50 @@
+name: Сообщение о проблеме
+description: Что-то не работает — опишите и приложите отчёт диагностики
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за отчёт! Чтобы разобраться быстрее, приложите файл диагностики.
+  - type: textarea
+    id: what
+    attributes:
+      label: Что произошло
+      description: Опишите, что вы делали и что пошло не так
+      placeholder: Нажал «Фармить», вотчер не запустился, в журнале пусто
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги
+      placeholder: |
+        1. Открыл вкладку «Дропы»
+        2. Выбрал игру
+        3. Нажал «Фармить»
+    validations:
+      required: false
+  - type: markdown
+    attributes:
+      value: |
+        ### Как приложить диагностику
+
+        Настройки → Обслуживание → **Сообщить о проблеме** (или «Собрать отчёт»).
+        Приложение сохранит `DropForge-report-*.txt` в папку «Загрузки» и скопирует краткую сводку в буфер.
+        Перетащите этот файл в поле ниже. Логин и токен в отчёт не попадают.
+  - type: textarea
+    id: report
+    attributes:
+      label: Отчёт диагностики
+      description: Вставьте содержимое файла или краткую сводку
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: version
+    attributes:
+      label: Версия DropForge
+      placeholder: 1.3.3
+    validations:
+      required: false

@@ -45,6 +45,8 @@
     openDataDir: () => call('app_data_dir'),
     diagnostics: () => call('diagnostics_report'),
     diagnosticsOpen: () => call('diagnostics_open'),
+    reportSummary: () => call('report_summary'),
+    reportIssue: (comment) => call('report_issue', { comment }),
     updateCheck: () => call('update_check'),
     updateInstall: (url) => call('update_install', { url }),
     quit: () => call('app_quit'),

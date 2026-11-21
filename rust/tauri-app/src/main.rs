@@ -294,6 +294,85 @@ fn version_greater(latest: &str, current: &str) -> bool {
     false
 }
 
+fn clipboard_copy(text: &str) -> bool {
+    let path = std::env::temp_dir().join("dropforge-clip.txt");
+    if std::fs::write(&path, text).is_err() {
+        return false;
+    }
+    let script = format!(
+        "Set-Clipboard -Value (Get-Content -Raw -Encoding UTF8 -LiteralPath '{}')",
+        path.display()
+    );
+    let mut command = Command::new("powershell");
+    command.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]);
+    hide_console(&mut command);
+    command.spawn().is_ok()
+}
+
+fn last_error_line() -> String {
+    let logs = LOGS.lock().unwrap();
+    for entry in logs.iter().rev() {
+        if entry.get("level").and_then(Value::as_str) == Some("error") {
+            return mask_text(&text_of(entry.get("message")));
+        }
+    }
+    String::from("нет")
+}
+
+fn short_summary() -> String {
+    let settings = load_settings();
+    let games: Vec<String> = settings.get("games").and_then(Value::as_array).map(|items| items.iter().map(|item| text_of(Some(item))).collect()).unwrap_or_default();
+    let running = STATUS.lock().unwrap().get("running").and_then(Value::as_bool).unwrap_or(false);
+    let windows = format!(
+        "{} {} (build {})",
+        reg_value("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "ProductName").unwrap_or_default(),
+        reg_value("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "DisplayVersion").unwrap_or_default(),
+        reg_value("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "CurrentBuild").unwrap_or_default()
+    );
+    format!(
+        "DropForge {APP_VERSION} · {windows}\nочередь: {} · фарм: {} · вход: {}\nwebview2: {}\nпоследняя ошибка: {}",
+        if games.is_empty() { "пусто".to_string() } else { games.join(", ") },
+        if running { "идёт" } else { "не запущен" },
+        if load_token().is_some() { "да" } else { "нет" },
+        webview2_version(),
+        last_error_line()
+    )
+}
+
+#[tauri::command]
+fn report_summary() -> Value {
+    let text = short_summary();
+    let copied = clipboard_copy(&text);
+    json!({ "text": text, "copied": copied })
+}
+
+#[tauri::command]
+fn report_issue(app: tauri::AppHandle, comment: String) -> Value {
+    let diagnostics = diagnostics_report(app.clone());
+    let body = diagnostics.get("text").and_then(Value::as_str).unwrap_or_default().to_string();
+    let summary = short_summary();
+    let content = format!(
+        "{summary}\n\n--- комментарий пользователя ---\n{}\n\n--- диагностика ---\n{body}\n",
+        comment.trim()
+    );
+    let name = format!("DropForge-report-{}.txt", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+    let downloads = std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .map(|home| home.join("Downloads"))
+        .filter(|dir| dir.is_dir())
+        .unwrap_or_else(profile_dir);
+    let path = downloads.join(&name);
+    if let Err(error) = std::fs::write(&path, &content) {
+        return json!({ "ok": false, "error": error.to_string() });
+    }
+    let copied = clipboard_copy(&summary);
+    let mut explore = Command::new("explorer");
+    explore.arg(format!("/select,{}", path.display()));
+    hide_console(&mut explore);
+    let _ = explore.spawn();
+    json!({ "ok": true, "path": mask_text(&path.display().to_string()), "summary": summary, "copied": copied })
+}
+
 #[tauri::command]
 fn diagnostics_open() -> Value {
     let path = profile_dir().join("diagnostics").join("latest.txt");
@@ -2693,6 +2772,8 @@ fn main() {
             shell_open,
             diagnostics_report,
             diagnostics_open,
+            report_summary,
+            report_issue,
             update_check,
             update_install,
             app_quit,

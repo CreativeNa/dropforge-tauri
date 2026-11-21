@@ -1024,6 +1024,21 @@ function settingsView() {
           <button class="btn-ghost" data-action="diagnostics">Собрать отчёт</button>
         </div>
       </div>
+      <div class="row" style="align-items:flex-start">
+        <div style="flex:1">
+          <div class="row-label">Сообщить о проблеме</div>
+          <div class="row-hint">Опишите, что не работает. Отчёт с диагностикой сохранится в «Загрузки», краткая сводка скопируется в буфер</div>
+          <textarea id="problem-text" placeholder="Что случилось?" style="width:100%;min-height:64px;margin-top:8px;background:var(--panel-3);color:var(--fg);border:1px solid var(--line-soft);border-radius:10px;padding:10px;font:inherit;resize:vertical"></textarea>
+        </div>
+      </div>
+      <div class="row">
+        <div class="row-hint">Приложенный файл можно отправить в чат или на GitHub</div>
+        <div style="display:flex;gap:8px">
+          <button class="btn-ghost" data-action="copy-summary">Краткая сводка</button>
+          <button class="btn-primary" data-action="report-issue">Сообщить о проблеме</button>
+        </div>
+      </div>
+
       <div class="row">
         <div>
           <div class="row-label">Обновления</div>
@@ -1316,6 +1331,31 @@ const actions = {
     } finally {
       state.busy.delete('diagnostics');
       render();
+    }
+  },
+
+  async 'copy-summary'() {
+    try {
+      const result = await api.reportSummary();
+      toast(result?.copied ? 'Краткая сводка скопирована' : 'Не удалось скопировать', result?.copied ? 'info' : 'error');
+    } catch (error) {
+      toast('Сводка: ' + error.message, 'error');
+    }
+  },
+
+  async 'report-issue'() {
+    const field = document.getElementById('problem-text');
+    const comment = field?.value ?? '';
+    try {
+      const result = await api.reportIssue(comment);
+      if (result?.ok) {
+        if (field) field.value = '';
+        toast('Отчёт сохранён: ' + result.path + ' · сводка в буфере');
+      } else {
+        toast('Отчёт: ' + (result?.error ?? 'не удалось'), 'error');
+      }
+    } catch (error) {
+      toast('Отчёт: ' + error.message, 'error');
     }
   },
 
