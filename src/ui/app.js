@@ -1019,12 +1019,12 @@ function settingsView() {
 
     <div class="card">
       <h3>Обслуживание</h3>
-      <div class="row">
+      <div class="row" style="flex-direction:column;align-items:stretch;gap:10px">
         <div>
           <div class="row-label">Диагностика</div>
           <div class="row-hint">Соберёт версии, состояние сервисов, доступность Twitch и журнал. Без логина, токена и путей с именем пользователя<br>Файл: <code>data/profile/diagnostics/latest.txt</code></div>
         </div>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn-ghost" data-action="diagnostics-open">Открыть отчёт</button>
           <button class="btn-ghost" data-action="diagnostics">Собрать отчёт</button>
         </div>
@@ -1038,7 +1038,7 @@ function settingsView() {
       </div>
       <div class="row">
         <div class="row-hint">Приложенный файл можно отправить в чат или на GitHub</div>
-        <div style="display:flex;gap:8px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn-ghost" data-action="copy-summary">Краткая сводка</button>
           <button class="btn-primary" data-action="report-issue">Сообщить о проблеме</button>
         </div>
