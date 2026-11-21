@@ -485,7 +485,11 @@ fn updater_script() -> String {
         "$src = Join-Path $tmp \"DropForge\"",
         "if (-not (Test-Path $src)) { $src = $tmp }",
         "Get-ChildItem $src -Force | ForEach-Object { Copy-Item $_.FullName -Destination $Dst -Recurse -Force }",
-        "if ($ExeName -ne \"DropForge.exe\") { Copy-Item (Join-Path $Dst \"DropForge.exe\") (Join-Path $Dst $ExeName) -Force }",
+        "if ($ExeName -ne \"DropForge.exe\") {",
+        "    Copy-Item (Join-Path $Dst \"DropForge.exe\") (Join-Path $Dst $ExeName) -Force",
+        "    Remove-Item (Join-Path $Dst \"DropForge.exe\") -Force -ErrorAction SilentlyContinue",
+        "}",
+        "Remove-Item (Join-Path $env:TEMP \"dropforge-update.ps1\") -Force -ErrorAction SilentlyContinue",
         "Start-Process -FilePath (Join-Path $Dst $ExeName)",
         "Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue",
         "Remove-Item $Zip -Force -ErrorAction SilentlyContinue",
@@ -2790,6 +2794,11 @@ fn main() {
     tauri::Builder::default()
         .manage(MinerState { child: Mutex::new(None), pubsub: Mutex::new(None), status: Mutex::new(Value::Null) })
         .setup(|app| {
+            // мусор от прошлых обновлений: скрипт и архив больше не нужны
+            let temp = std::env::temp_dir();
+            let _ = std::fs::remove_file(temp.join("dropforge-update.ps1"));
+            let _ = std::fs::remove_file(temp.join("dropforge-update.zip"));
+            let _ = std::fs::remove_file(temp.join("dropforge-clip.txt"));
             if std::env::var("DROPFORGE_DEVICE_UI").is_ok() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
