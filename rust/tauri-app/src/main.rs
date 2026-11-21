@@ -217,8 +217,8 @@ fn reachable(url: &str) -> String {
         .build()
         .new_agent();
     match agent.head(url).call() {
-        Ok(response) => format!("OK {}", response.status().as_u16()),
-        Err(ureq::Error::StatusCode(code)) => format!("HTTP {code}"),
+        Ok(response) => format!("доступен (HTTP {})", response.status().as_u16()),
+        Err(ureq::Error::StatusCode(code)) => format!("доступен (HTTP {code})"),
         Err(error) => format!("ошибка: {error}"),
     }
 }
@@ -249,7 +249,8 @@ fn diagnostics_report(app: tauri::AppHandle) -> Value {
         }
     }
     let settings = load_settings();
-    lines.push(format!("settings.games: {}", text_of(settings.get("games"))));
+    let games: Vec<String> = settings.get("games").and_then(Value::as_array).map(|items| items.iter().map(|item| text_of(Some(item))).collect()).unwrap_or_default();
+    lines.push(format!("settings.games: {}", games.join(", ")));
     lines.push(format!("settings.flags: autoClaim={} spade={} tray={}",
         settings.get("autoClaim").and_then(Value::as_bool).unwrap_or(false),
         settings.get("sendSpadeEvents").and_then(Value::as_bool).unwrap_or(false),
