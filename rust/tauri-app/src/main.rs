@@ -263,6 +263,39 @@ fn diagnostics_report(app: tauri::AppHandle) -> Value {
     let progress = read_json(progress_path()).unwrap_or(Value::Null);
     lines.push(format!("progress.at: {}", text_of(progress.get("at"))));
     lines.push(format!("progress.drops: {}", progress.get("drops").and_then(Value::as_object).map(|map| map.len()).unwrap_or(0)));
+    // прогресс по дропам игр из очереди: минуты сейчас / сколько нужно
+    if let Some(cache) = read_json(profile_dir().join("catalog-cache.json")) {
+        let campaigns = cache.get("campaigns").and_then(Value::as_array).cloned().unwrap_or_default();
+        let progress_drops = progress.get("drops").and_then(Value::as_object).cloned().unwrap_or_default();
+        let mut shown = 0usize;
+        for campaign in &campaigns {
+            let game_slug = text_of(campaign.get("game").and_then(|game| game.get("slug")));
+            if !games.iter().any(|slug| slug == &game_slug) {
+                continue;
+            }
+            let campaign_id = text_of(campaign.get("id"));
+            let campaign_name = text_of(campaign.get("name"));
+            for drop in campaign.get("timeBasedDrops").and_then(Value::as_array).cloned().unwrap_or_default() {
+                let drop_id = text_of(drop.get("id"));
+                let Some(state) = progress_drops.get(&drop_id) else { continue };
+                if text_of(state.get("campaignId")) != campaign_id {
+                    continue;
+                }
+                let claimed = state.get("isClaimed").and_then(Value::as_bool).unwrap_or(false);
+                lines.push(format!(
+                    "drop progress: {campaign_name} / {} — {}/{} мин{}",
+                    text_of(drop.get("name")),
+                    state.get("currentMinutes").and_then(Value::as_f64).unwrap_or(0.0),
+                    state.get("requiredMinutes").and_then(Value::as_f64).unwrap_or(0.0),
+                    if claimed { " (получен)" } else { "" }
+                ));
+                shown += 1;
+            }
+        }
+        if shown == 0 {
+            lines.push(String::from("drop progress: нет данных по играм из очереди"));
+        }
+    }
     lines.push(format!("network gql.twitch.tv: {}", reachable("https://gql.twitch.tv")));
     lines.push(format!("network api.github.com: {}", reachable("https://api.github.com")));
     lines.push(format!("network drops.sunkwi.com: {}", reachable("https://drops.sunkwi.com/drops.json")));
