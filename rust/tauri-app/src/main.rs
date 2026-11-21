@@ -1679,7 +1679,11 @@ fn pubsub_exe() -> Option<std::path::PathBuf> {
             candidates.push(dir.join("dropforge-pubsub-svc.exe"));
         }
     }
-    candidates.into_iter().find(|candidate| candidate.is_file())
+    if let Some(found) = candidates.into_iter().find(|candidate| candidate.is_file()) {
+        return Some(found);
+    }
+    let dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|path| path.to_path_buf()))?;
+    find_service_exe(&dir, "dropforge-pubsub-svc.exe", 6)
 }
 
 /// PubSub в отдельном процессе: события уходят в UI как есть.
@@ -1803,7 +1807,32 @@ fn watcher_exe() -> Option<std::path::PathBuf> {
             candidates.push(dir.join("dropforge-watcher-svc.exe"));
         }
     }
-    candidates.into_iter().find(|candidate| candidate.is_file())
+    if let Some(found) = candidates.into_iter().find(|candidate| candidate.is_file()) {
+        return Some(found);
+    }
+    let dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|path| path.to_path_buf()))?;
+    find_service_exe(&dir, "dropforge-watcher-svc.exe", 6)
+}
+
+/// Ищем исполняемый файл сервиса где угодно рядом с приложением.
+fn find_service_exe(dir: &std::path::Path, name: &str, depth: usize) -> Option<std::path::PathBuf> {
+    if depth == 0 {
+        return None;
+    }
+    let direct = dir.join(name);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            if let Some(found) = find_service_exe(&path, name, depth - 1) {
+                return Some(found);
+            }
+        }
+    }
+    None
 }
 
 fn gql_value(token: &str, operation: &str, hash: &str, variables: Value) -> Option<Value> {
@@ -3293,6 +3322,12 @@ fn legacy_cleanup() {
                 if duplicate.is_dir() && !duplicate.starts_with(install) {
                     let _ = std::fs::remove_dir_all(&duplicate);
                 }
+            }
+        }
+        if running_installed {
+            let leftovers = install.join("_up_");
+            if leftovers.is_dir() {
+                let _ = std::fs::remove_dir_all(&leftovers);
             }
         }
         if let Some(dir) = current.parent() {
