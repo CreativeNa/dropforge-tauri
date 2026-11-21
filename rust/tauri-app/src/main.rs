@@ -293,7 +293,11 @@ fn diagnostics_report(app: tauri::AppHandle) -> Value {
             }
         }
         if shown == 0 {
-            lines.push(String::from("drop progress: нет данных по играм из очереди"));
+            if games.iter().any(|slug| slug.starts_with("local:")) {
+                lines.push(String::from("drop progress: локальная кампания — Twitch не отдаёт прогресс по таким дропсам"));
+            } else {
+                lines.push(String::from("drop progress: нет данных по играм из очереди"));
+            }
         }
     }
     lines.push(format!("network gql.twitch.tv: {}", reachable("https://gql.twitch.tv")));
@@ -2799,6 +2803,17 @@ fn main() {
             let _ = std::fs::remove_file(temp.join("dropforge-update.ps1"));
             let _ = std::fs::remove_file(temp.join("dropforge-update.zip"));
             let _ = std::fs::remove_file(temp.join("dropforge-clip.txt"));
+            if let Ok(exe) = std::env::current_exe() {
+                let name = exe.file_name().and_then(|value| value.to_str()).unwrap_or_default().to_string();
+                if name != "DropForge.exe" {
+                    if let Some(dir) = exe.parent() {
+                        let duplicate = dir.join("DropForge.exe");
+                        if duplicate.is_file() {
+                            let _ = std::fs::remove_file(&duplicate);
+                        }
+                    }
+                }
+            }
             if std::env::var("DROPFORGE_DEVICE_UI").is_ok() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
