@@ -93,6 +93,7 @@ fn campaign_view(raw: &Value) -> Value {
                     "progress": 0,
                     "isClaimed": false,
                     "canClaim": false,
+                    "note": drop.get("note").cloned().unwrap_or(json!("")),
                     "benefits": existing,
                 });
             }
@@ -104,22 +105,66 @@ fn campaign_view(raw: &Value) -> Value {
                 .iter()
                 .filter_map(|edge| edge.get("benefit"))
                 .map(|benefit| {
+                    let mut name = text_of(benefit.get("name"));
+                    let mut image = benefit.get("imageAssetURL").cloned().unwrap_or(Value::Null);
+                    let mut badge = benefit.get("badge").and_then(Value::as_bool).unwrap_or(false);
+                    // у GTAVI локальная версия тоже отдаёт «сундуки»: подменяем на реальные награды
+                    if text_of(raw.get("name")).to_lowercase().contains("gtavi") {
+                        let subs = drop.get("requiredSubs").and_then(Value::as_f64).unwrap_or(0.0) as i64;
+                        let is_badge_chest = name.to_lowercase().contains("badge") || badge;
+                        let replacement: Option<(&str, &str, bool)> = match (subs, is_badge_chest) {
+                            (1, true) => Some(("Welcome 2 Miami", "https://static-cdn.jtvnw.net/badges/v1/1c51d343-754e-4fee-a717-ec95cafb5482/3", true)),
+                            (2, true) => Some(("Scored Big", "https://static-cdn.jtvnw.net/badges/v1/2acfc5b8-7907-4b05-9b30-e211a93ffc63/3", true)),
+                            (3, true) => Some(("Bleed Miami", "https://static-cdn.jtvnw.net/badges/v1/c7b8fc7d-7ebd-46e1-8f57-cc58ce51a9d1/3", true)),
+                            (1, false) => Some(("BustedPlz", "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_fba1756b9e5f443c9725542b78f93b11/default/dark/3.0", false)),
+                            (2, false) => Some(("DinoBusted", "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_a021fa5191714969829fee79badc0756/default/dark/3.0", false)),
+                            (3, false) => Some(("SabaBusted", "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_bcdb69418a044bf982e1fed15c34ce63/default/dark/3.0", false)),
+                            _ => None,
+                        };
+                        if let Some((new_name, url, is_badge)) = replacement {
+                            name = new_name.to_string();
+                            image = json!(url);
+                            badge = is_badge;
+                        } else if subs <= 0 && (name.to_lowercase().contains("chest") || name.to_lowercase().contains("dvd")) {
+                            name = String::from("Ежедневный сундук с цепочкой");
+                            image = Value::Null;
+                        }
+                    }
                     json!({
                         "id": benefit.get("id"),
-                        "name": benefit.get("name"),
+                        "name": name,
                         "type": benefit.get("distributionType"),
-                        "imageUrl": benefit.get("imageAssetURL"),
-                        "badge": benefit.get("badge").cloned().unwrap_or(json!(false)),
+                        "imageUrl": image,
+                        "badge": badge,
                     })
                 })
                 .collect();
+            let first_benefit_name = benefits
+                .first()
+                .and_then(|benefit| benefit.get("name"))
+                .map(|value| text_of(Some(value)))
+                .unwrap_or_default();
+            let mut drop_name = text_of(drop.get("name"));
+            let mut drop_note = text_of(drop.get("note"));
+            if text_of(raw.get("name")).to_lowercase().contains("gtavi") {
+                let mut watch_chest = false;
+                if drop_name.to_lowercase().contains("dvd") {
+                    drop_name = String::from("Ежедневный сундук с цепочкой");
+                    drop_note = String::from("Проверяйте прогресс на Twitch");
+                    watch_chest = true;
+                }
+                if !first_benefit_name.is_empty() && !watch_chest {
+                    drop_name = first_benefit_name;
+                }
+            }
             json!({
                 "id": drop.get("id"),
-                "name": drop.get("name"),
+                "name": drop_name,
                 "startsAt": drop.get("startAt"),
                 "endsAt": drop.get("endAt"),
                 "requiredMinutes": required,
                 "requiredSubs": drop.get("requiredSubs").cloned().unwrap_or(json!(0)),
+                "note": drop_note,
                 "currentMinutes": 0,
                 "remainingMinutes": required,
                 "progress": 0,
@@ -145,6 +190,8 @@ fn campaign_view(raw: &Value) -> Value {
         "linkUrl": raw.get("accountLinkURL"),
         "reward": raw.get("rewardCampaign").cloned().unwrap_or(json!(false)),
         "webUrl": raw.get("webUrl"),
+        "watchRewardIds": raw.get("watchRewardIds").cloned().unwrap_or(json!([])),
+        "subRewardIds": raw.get("subRewardIds").cloned().unwrap_or(json!([])),
         "active": true,
         "upcoming": false,
         "expired": false,
@@ -679,22 +726,46 @@ fn raw_from_catalog(group: &Value, campaign: &Value) -> Value {
 
 fn raw_from_reward(campaign: &Value) -> Value {
     let groups = campaign.get("rewardGroups").and_then(Value::as_array).cloned().unwrap_or_default();
-    let category = groups
+    let mut category = groups
         .first()
         .and_then(|group| group.get("categories"))
         .and_then(Value::as_array)
         .and_then(|items| items.first())
         .cloned()
         .unwrap_or(Value::Null);
+    // у GTAVI в фиде нет категории — без неё кампания выпадала и подхватывалась как «локальная»
+    if category.is_null()
+        && text_of(campaign.get("id")) == "b7669f9e-c69c-4a9b-a3b2-36266c1bdfc0"
+    {
+        category = json!({
+            "id": "1867279146",
+            "slug": "grand-theft-auto-vi",
+            "displayName": "Grand Theft Auto VI",
+        });
+    }
 
     let mut drops = Vec::new();
+    let campaign_title = text_of(campaign.get("name")).to_lowercase();
+    let mut watch_reward_ids: Vec<String> = Vec::new();
+    let mut sub_reward_ids: Vec<String> = Vec::new();
     for group in &groups {
         let minutes = group
             .get("unlockRequirements")
             .and_then(|req| req.get("minuteWatchedGoal"))
             .and_then(Value::as_f64)
             .unwrap_or(0.0);
+        let subs = group
+            .get("unlockRequirements")
+            .and_then(|req| req.get("subsGoal"))
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0);
         for reward in group.get("rewards").and_then(Value::as_array).cloned().unwrap_or_default() {
+            if let Some(reward_id) = reward.get("id").map(|value| text_of(Some(value))) {
+                if !reward_id.is_empty() {
+                    if minutes > 0.0 { watch_reward_ids.push(reward_id.clone()); }
+                    if subs > 0.0 { sub_reward_ids.push(reward_id); }
+                }
+            }
             let image = reward
                 .get("thumbnailImage")
                 .and_then(|image| image.get("image1xURL"))
@@ -704,20 +775,50 @@ fn raw_from_reward(campaign: &Value) -> Value {
             let image_text = text_of(Some(&image));
             let redemption = text_of(reward.get("redemptionURL")).to_lowercase();
             let is_badge = image_text.contains("/badges/") || redemption.contains("badge");
+            let reward_name = text_of(reward.get("name"));
+            let mut final_name = reward_name.clone();
+            let mut final_image = image.clone();
+            let mut final_badge = is_badge;
+            // у GTAVI «сундуки» подписок на самом деле содержат конкретные награды
+            if campaign_title.contains("gtavi") && subs <= 0.0 && reward_name.to_lowercase().contains("dvd") {
+                final_name = String::from("Ежедневный сундук с цепочкой (1 из 6)");
+                final_image = Value::Null;
+            }            // у GTAVI «сундуки» подписок на самом деле содержат конкретные награды
+            if campaign_title.contains("gtavi") && subs > 0.0 {
+                let is_badge_chest = reward_name.to_lowercase().contains("badge");
+                let replacement: Option<(&str, &str, bool)> = match (subs as i64, is_badge_chest) {
+                    (1, true) => Some(("Welcome 2 Miami", "https://static-cdn.jtvnw.net/badges/v1/1c51d343-754e-4fee-a717-ec95cafb5482/3", true)),
+                    (2, true) => Some(("Scored Big", "https://static-cdn.jtvnw.net/badges/v1/2acfc5b8-7907-4b05-9b30-e211a93ffc63/3", true)),
+                    (3, true) => Some(("Bleed Miami", "https://static-cdn.jtvnw.net/badges/v1/c7b8fc7d-7ebd-46e1-8f57-cc58ce51a9d1/3", true)),
+                    (1, false) => Some(("BustedPlz", "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_fba1756b9e5f443c9725542b78f93b11/default/dark/3.0", false)),
+                    (2, false) => Some(("DinoBusted", "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_a021fa5191714969829fee79badc0756/default/dark/3.0", false)),
+                    (3, false) => Some(("SabaBusted", "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_bcdb69418a044bf982e1fed15c34ce63/default/dark/3.0", false)),
+                    _ => None,
+                };
+                if let Some((name, url, badge)) = replacement {
+                    final_name = name.to_string();
+                    final_image = json!(url);
+                    final_badge = badge;
+                }
+            }
+            let drop_minutes = if campaign_title.contains("gtavi") { 0.0 } else { minutes };
+            let drop_note = if campaign_title.contains("gtavi") && subs <= 0.0 { "Проверяйте прогресс на Twitch" } else { "" };
             drops.push(json!({
                 "id": text_or_null(reward.get("id")),
-                "name": reward.get("name").cloned().unwrap_or(json!("Награда")),
+                "name": final_name,
                 "startAt": text_or_null(campaign.get("startsAt")),
                 "endAt": reward.get("earnableUntil").or_else(|| campaign.get("endsAt")).cloned().unwrap_or(Value::Null),
-                "requiredMinutesWatched": minutes,
+                "requiredMinutesWatched": drop_minutes,
+                "requiredSubs": subs,
+                "note": drop_note,
                 "preconditionDrops": [],
                 "benefitEdges": [{
                     "benefit": {
                         "id": text_or_null(reward.get("id")),
-                        "name": reward.get("name").cloned().unwrap_or(json!("Награда")),
+                        "name": final_name,
                         "distributionType": "QUEST_REWARD",
-                        "imageAssetURL": image,
-                        "badge": is_badge,
+                        "imageAssetURL": final_image,
+                        "badge": final_badge,
                     }
                 }],
             }));
@@ -736,11 +837,17 @@ fn raw_from_reward(campaign: &Value) -> Value {
             "id": category_id,
             "name": category.get("displayName").or_else(|| category.get("name")).cloned().unwrap_or(json!("Twitch")),
             "slug": text_or_null(category.get("slug")),
-            "boxArtURL": Value::Null,
+            "boxArtURL": if category_id.is_null() {
+                Value::Null
+            } else {
+                json!(format!("https://static-cdn.jtvnw.net/ttv-boxart/{}_IGDB-285x380.jpg", text_of(Some(&category_id))))
+            },
         },
         "allow": { "isEnabled": false, "channels": [] },
         "timeBasedDrops": drops,
         "rewardCampaign": true,
+        "watchRewardIds": watch_reward_ids,
+        "subRewardIds": sub_reward_ids,
         "webUrl": campaign.get("webUrl").cloned().unwrap_or(json!(REWARDS_PAGE)),
         "suggestedChannel": Value::Null,
         "source": "reward",
@@ -753,6 +860,82 @@ fn progress_path() -> PathBuf {
 
 /// Минуты по каждому дропу кампании: DropCampaignDetails по кампаниям из инвентаря.
 /// Награды, которые аккаунт уже получил (бейджи, дропы).
+/// Полученные награды кампаний: id, тип, статус и дата.
+fn earned_rewards(token: &str) -> Vec<Value> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+        .build()
+        .new_agent();
+    let body = json!([{
+        "operationName": "Inventory",
+        "extensions": { "persistedQuery": { "version": 1, "sha256Hash": "8337eb8541b314040b0edde0c09c5c7a2783ba1960aa9edfbf3bac16d0fec404" } },
+        "variables": { "fetchRewardCampaigns": true }
+    }]);
+    let response: Value = agent
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", "kimne78kx3ncx6brgo4mv6wki5h1ko")
+        .header("Content-Type", "text/plain;charset=UTF-8")
+        .header("Origin", "https://www.twitch.tv")
+        .header("Authorization", &format!("OAuth {token}"))
+        .send(body.to_string())
+        .ok()
+        .and_then(|response| response.into_body().read_json::<Value>().ok())
+        .unwrap_or(Value::Null);
+    response
+        .get(0)
+        .and_then(|item| item.get("data"))
+        .and_then(|data| data.get("currentUser"))
+        .and_then(|user| user.get("inventory"))
+        .and_then(|inventory| inventory.get("earnedDropRewards"))
+        .and_then(|earned| earned.get("edges"))
+        .and_then(Value::as_array)
+        .map(|edges| {
+            edges
+                .iter()
+                .filter_map(|edge| edge.get("node"))
+                .map(|node| {
+                    json!({
+                        "campaignId": node.get("campaign").and_then(|campaign| campaign.get("id")),
+                        "itemId": node.get("item").and_then(|item| item.get("id")),
+                        "name": node.get("item").and_then(|item| item.get("name")),
+                        "type": node.get("item").and_then(|item| item.get("distributionType")),
+                        "status": node.get("status"),
+                        "earnedAt": node.get("earnedAt"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Бейджи, доступные аккаунту (в том числе полученные за кампании).
+fn available_badges(token: &str) -> Vec<Value> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+        .build()
+        .new_agent();
+    let query = "query { currentUser { availableBadges { id setID version title imageURL } } }";
+    let response: Value = agent
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", "kimne78kx3ncx6brgo4mv6wki5h1ko")
+        .header("Content-Type", "application/json")
+        .header("Origin", "https://www.twitch.tv")
+        .header("Authorization", &format!("OAuth {token}"))
+        .send(json!({ "query": query, "variables": {} }).to_string())
+        .ok()
+        .and_then(|response| response.into_body().read_json::<Value>().ok())
+        .unwrap_or(Value::Null);
+    response
+        .get("data")
+        .and_then(|data| data.get("currentUser"))
+        .and_then(|user| user.get("availableBadges"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
+}
+
 fn claimed_benefits(token: &str) -> Vec<String> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(20)))
@@ -825,11 +1008,15 @@ fn refresh_progress() -> Result<Value, String> {
     }
 
     let claimed = claimed_benefits(&token);
+    let earned = earned_rewards(&token);
+    let profile_badges = available_badges(&token);
     let payload = json!({
         "at": chrono::Utc::now().to_rfc3339(),
         "campaigns": campaigns_seen,
         "drops": drops,
         "claimedBenefits": claimed,
+        "earnedRewards": earned,
+        "availableBadges": profile_badges,
     });
     std::fs::create_dir_all(profile_dir()).ok();
     std::fs::write(
@@ -917,19 +1104,18 @@ fn refresh_catalog() -> Result<Value, String> {
             // (полный список дропов канала и обложка кампании)
             // не затираем каталожную/наградную версию: у неё бывают свои дропы и бейджи,
             // поэтому локальная копия живёт рядом с отдельным id
-            let local_id = format!("{id}:local");
-            match campaigns.iter().position(|item| text_of(item.get("id")) == id) {
-                Some(_) => {
-                    let mut local = campaign;
-                    if let Some(object) = local.as_object_mut() {
-                        object.insert("id".into(), json!(local_id));
-                    }
-                    if !campaigns.iter().any(|item| text_of(item.get("id")) == local_id) {
-                        campaigns.push(local);
-                    }
-                }
-                None => campaigns.push(campaign),
+            // если такая кампания уже есть в глобальном каталоге — это не «локальная»,
+            // а канальная версия глобальной: в локальные её не показываем
+            let local_name = text_of(campaign.get("name")).to_lowercase();
+            let duplicate_global = campaigns.iter().any(|item| {
+                let global_id = text_of(item.get("id"));
+                let global_name = text_of(item.get("name")).to_lowercase();
+                global_id == id || (!global_name.is_empty() && global_name == local_name)
+            });
+            if duplicate_global {
+                continue;
             }
+            campaigns.push(campaign);
         }
     }
 
@@ -1283,22 +1469,62 @@ fn raw_from_local(login: &str, channel_id: &str, campaign: &Value) -> Value {
                 .iter()
                 .filter_map(|edge| edge.get("benefit"))
                 .map(|benefit| {
+                    let mut name = text_of(benefit.get("name"));
+                    let mut image = benefit.get("imageAssetURL").cloned().unwrap_or(Value::Null);
+                    let mut badge = benefit.get("badge").and_then(Value::as_bool).unwrap_or(false);
+                    if text_of(campaign.get("name")).to_lowercase().contains("gtavi") {
+                        let subs = drop.get("requiredSubs").and_then(Value::as_f64).unwrap_or(0.0) as i64;
+                        let is_badge_chest = name.to_lowercase().contains("badge") || badge;
+                        let replacement: Option<(&str, &str, bool)> = match (subs, is_badge_chest) {
+                            (1, true) => Some(("Welcome 2 Miami", "https://static-cdn.jtvnw.net/badges/v1/1c51d343-754e-4fee-a717-ec95cafb5482/3", true)),
+                            (2, true) => Some(("Scored Big", "https://static-cdn.jtvnw.net/badges/v1/2acfc5b8-7907-4b05-9b30-e211a93ffc63/3", true)),
+                            (3, true) => Some(("Bleed Miami", "https://static-cdn.jtvnw.net/badges/v1/c7b8fc7d-7ebd-46e1-8f57-cc58ce51a9d1/3", true)),
+                            (1, false) => Some(("BustedPlz", "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_fba1756b9e5f443c9725542b78f93b11/default/dark/3.0", false)),
+                            (2, false) => Some(("DinoBusted", "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_a021fa5191714969829fee79badc0756/default/dark/3.0", false)),
+                            (3, false) => Some(("SabaBusted", "https://static-cdn.jtvnw.net/emoticons/v2/emotesv2_bcdb69418a044bf982e1fed15c34ce63/default/dark/3.0", false)),
+                            _ => None,
+                        };
+                        if let Some((new_name, url, is_badge)) = replacement {
+                            name = new_name.to_string();
+                            image = json!(url);
+                            badge = is_badge;
+                        }
+                    }
                     json!({
                         "id": benefit.get("id"),
-                        "name": benefit.get("name"),
+                        "name": name,
                         "type": benefit.get("distributionType"),
-                        "imageUrl": benefit.get("imageAssetURL"),
-                        "badge": benefit.get("badge").cloned().unwrap_or(json!(false)),
+                        "imageUrl": image,
+                        "badge": badge,
                     })
                 })
                 .collect();
+            let first_benefit_name = benefits
+                .first()
+                .and_then(|benefit| benefit.get("name"))
+                .map(|value| text_of(Some(value)))
+                .unwrap_or_default();
+            let mut drop_name = text_of(drop.get("name"));
+            let mut drop_note = text_of(drop.get("note"));
+            if text_of(campaign.get("name")).to_lowercase().contains("gtavi") {
+                let mut watch_chest = false;
+                if drop_name.to_lowercase().contains("dvd") {
+                    drop_name = String::from("Ежедневный сундук с цепочкой");
+                    drop_note = String::from("Проверяйте прогресс на Twitch");
+                    watch_chest = true;
+                }
+                if !first_benefit_name.is_empty() && !watch_chest {
+                    drop_name = first_benefit_name;
+                }
+            }
             json!({
                 "id": drop.get("id"),
-                "name": drop.get("name"),
+                "name": drop_name,
                 "startsAt": drop.get("startAt"),
                 "endsAt": drop.get("endAt"),
                 "requiredMinutes": required,
                 "requiredSubs": drop.get("requiredSubs").cloned().unwrap_or(json!(0)),
+                "note": drop_note,
                 "currentMinutes": 0,
                 "remainingMinutes": required,
                 "progress": 0,
@@ -1707,6 +1933,27 @@ fn pick_channel(token: &str, slug: &str) -> Option<(String, String)> {
         let id = channel_id_by_login(login)?;
         return Some((id, login.to_string()));
     }
+    // до 2 декабря у GTA VI приоритет — канал bratishkinoff, если он в эфире
+    if slug == "grand-theft-auto-vi" {
+        let deadline = chrono::DateTime::parse_from_rfc3339("2026-12-02T00:00:00Z")
+            .map(|value| value.with_timezone(&chrono::Utc))
+            .ok();
+        let now = chrono::Utc::now();
+        if deadline.map(|value| now < value).unwrap_or(false) {
+            let query = "query($login:String!){user(login:$login){id stream{id}}}";
+            if let Some(response) = gql_raw(token, query, json!({ "login": "bratishkinoff" })) {
+                let user = response.get("data").and_then(|data| data.get("user"));
+                let live = user
+                    .and_then(|user| user.get("stream"))
+                    .map(|stream| !stream.is_null())
+                    .unwrap_or(false);
+                let id = text_of(user.and_then(|user| user.get("id")));
+                if live && !id.is_empty() {
+                    return Some((id, String::from("bratishkinoff")));
+                }
+            }
+        }
+    }
     // кампания, ограниченная списком каналов: берём первый из разрешённых
     let restricted = has_allowed_channels(slug);
     if let Some(found) = allowed_channel_for(token, slug) {
@@ -1846,6 +2093,7 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
     match command.spawn() {
         Ok(mut child) => {
             let pid = child.id();
+            let slug_owned = slug.to_string();
             // токен уходит в stdin: в списке процессов его не видно
             if let Some(stdin) = child.stdin.as_mut() {
                 use std::io::Write;
@@ -1869,6 +2117,8 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
                             .and_then(|progress| progress.get("currentMinutesWatched"))
                             .and_then(Value::as_f64);
                         // прогресс: обновляем минуты и отдаём снимок в UI
+                        record_watch_minute(&slug_owned, 1.0);
+                        bump_gta_day(&slug_owned, 1.0);
                         let _ = refresh_progress();
                         if let Some(handle) = &handle {
                             let _ = handle.emit("state", snapshot_from_profile());
@@ -2241,6 +2491,11 @@ fn snapshot_from_profile() -> Value {
         .and_then(Value::as_array)
         .map(|items| items.iter().map(|value| text_of(Some(value))).collect())
         .unwrap_or_default();
+    let owned_titles: std::collections::HashSet<String> = progress
+        .get("availableBadges")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().map(|item| text_of(item.get("title"))).collect())
+        .unwrap_or_default();
     let mut badges: Vec<Value> = Vec::new();
     for campaign in &campaigns {
         let campaign_name = text_of(campaign.get("name"));
@@ -2269,7 +2524,11 @@ fn snapshot_from_profile() -> Value {
                     continue;
                 }
                 let benefit_id = text_of(benefit.get("id"));
-                let claimed = claimed_ids.contains(&benefit_id);
+                let badge_name = text_of(benefit.get("name"));
+                if badge_name.to_lowercase().contains("iguana") {
+                    continue;
+                }
+                let claimed = claimed_ids.contains(&benefit_id) || owned_titles.contains(&badge_name);
                 let paid = subs > 0.0 || minutes <= 0.0;
                 let note = if subs > 0.0 {
                     "нужна подписка: оформляется на Twitch"
@@ -2299,6 +2558,173 @@ fn snapshot_from_profile() -> Value {
                 }));
             }
         }
+    }
+    // коллекции наградных кампаний: сундуки за просмотр и подписки
+    let earned_list = progress.get("earnedRewards").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut collections: Vec<Value> = Vec::new();
+    for campaign in &campaigns {
+        let campaign_id = text_of(campaign.get("id"));
+        let campaign_earned_names: Vec<String> = earned_list
+            .iter()
+            .filter(|entry| text_of(entry.get("campaignId")) == campaign_id)
+            .map(|entry| text_of(entry.get("name")))
+            .collect();
+        let watch_ids: Vec<String> = campaign
+            .get("watchRewardIds")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().map(|item| text_of(Some(item))).collect())
+            .unwrap_or_default();
+        let sub_ids: Vec<String> = campaign
+            .get("subRewardIds")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().map(|item| text_of(Some(item))).collect())
+            .unwrap_or_default();
+        if watch_ids.is_empty() && sub_ids.is_empty() {
+            continue;
+        }
+        let mut chests = 0usize;
+        let mut subs = 0usize;
+        let mut final_earned = false;
+        for entry in &earned_list {
+            if text_of(entry.get("campaignId")) != campaign_id {
+                continue;
+            }
+            let item_id = text_of(entry.get("itemId"));
+            if watch_ids.iter().any(|id| id == &item_id) {
+                chests += 1;
+            }
+            if sub_ids.iter().any(|id| id == &item_id) {
+                subs += 1;
+            }
+            if text_of(entry.get("name")).to_lowercase().contains("iguana") {
+                final_earned = true;
+            }
+        }
+        let campaign_name = text_of(campaign.get("name"));
+        let is_gta = campaign_name.to_lowercase().contains("gtavi");
+        let available: Vec<Value> = progress
+            .get("availableBadges")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if is_gta {
+            // у наградных «сундуков» в earned лежат их содержимые, поэтому считаем по именам
+            let chain_names = ["Purple Chain", "Bronze Chain", "Silver Chain", "Gold Chain", "Diamond Chain", "Miami Chain"];
+            let sub_names = ["Welcome 2 Miami", "Scored Big", "Bleed Miami", "BustedPlz", "DinoBusted", "SabaBusted"];
+            let mut chain_flags: Vec<bool> = chain_names.iter().map(|_| false).collect();
+            let mut sub_count = 0usize;
+            for entry in &earned_list {
+                if text_of(entry.get("campaignId")) != campaign_id {
+                    continue;
+                }
+                let name = text_of(entry.get("name"));
+                if let Some(index) = chain_names.iter().position(|chain| *chain == name) {
+                    chain_flags[index] = true;
+                }
+                if sub_names.iter().any(|sub| *sub == name) {
+                    sub_count += 1;
+                }
+            }
+            // точные данные из профиля: setID цепочек
+            let chain_sets = ["purple-chain", "bronze-chain", "silver-chain", "gold-chain", "diamond-chain", "miami-chain"];
+            let owned: Vec<&Value> = available
+                .iter()
+                .filter(|badge| {
+                    let set = text_of(badge.get("setID"));
+                    chain_sets.iter().any(|known| *known == set)
+                })
+                .collect();
+            if !owned.is_empty() {
+                for index in 0..chain_names.len() {
+                    chain_flags[index] = owned.iter().any(|badge| text_of(badge.get("setID")) == chain_sets[index]);
+                }
+            }
+            chests = chain_flags.iter().filter(|value| **value).count();
+            subs = sub_count;
+            let game_slug = text_of(campaign.get("game").and_then(|game| game.get("slug")));
+            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+            let watch_days = load_settings();
+            let bucket = watch_days
+                .get("watchDays")
+                .and_then(|days| days.get(&game_slug))
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            let today_minutes = bucket.get(&today).and_then(Value::as_f64).unwrap_or(0.0);
+            let days_done = bucket.values().filter(|value| value.as_f64().unwrap_or(0.0) >= 60.0).count();
+            let mut settings_snapshot = watch_days.clone();
+            let manual_closed = settings_snapshot
+                .get("closedDays")
+                .and_then(|days| days.get(&game_slug))
+                .map(|value| text_of(Some(value)) == today)
+                .unwrap_or(false);
+            let seen_before = settings_snapshot
+                .get("chainsSeen")
+                .and_then(|days| days.get(&game_slug))
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0) as usize;
+            let day_closed = manual_closed || today_minutes >= 60.0 || chests > seen_before;
+            if let Some(root) = settings_snapshot.as_object_mut() {
+                let seen = root.entry("chainsSeen").or_insert_with(|| json!({}));
+                if let Some(map) = seen.as_object_mut() {
+                    map.insert(game_slug.clone(), json!(chests));
+                }
+                let _ = save_settings(&settings_snapshot);
+            }
+            // Twitch не отдаёт цепочки в API — разрешаем отметить вручную
+            let manual = load_settings()
+                .get("gtaChains")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+                .clamp(0.0, 6.0) as usize;
+            if manual > chests {
+                chests = manual;
+                for index in 0..chain_flags.len() {
+                    chain_flags[index] = index < manual;
+                }
+            }
+            let mut chains: Vec<Value> = Vec::new();
+            for (index, name) in chain_names.iter().enumerate() {
+                let image = available
+                    .iter()
+                    .find(|badge| text_of(badge.get("setID")) == chain_sets[index])
+                    .and_then(|badge| badge.get("imageURL"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                chains.push(json!({ "name": name, "earned": chain_flags[index], "imageUrl": image }));
+            }
+            collections.push(json!({
+                "campaignId": campaign_id,
+                "campaign": campaign_name,
+                "gameSlug": campaign.get("game").and_then(|game| game.get("slug")),
+                "chests": chests,
+                "chestsTotal": 6,
+                "subs": subs,
+                "subsTotal": 6,
+                "finalEarned": final_earned,
+                "chains": chains,
+                "earnedNames": campaign_earned_names,
+                "todayMinutes": today_minutes,
+                "daysDone": days_done,
+                "dayClosed": day_closed,
+                "gtaDay": watch_days.get("gtaDay").cloned().unwrap_or(Value::Null),
+            }));
+            continue;
+        }
+        let mut chains: Vec<Value> = Vec::new();
+        let _ = &mut chains;
+        collections.push(json!({
+            "campaignId": campaign_id,
+            "campaign": campaign_name,
+            "gameSlug": campaign.get("game").and_then(|game| game.get("slug")),
+            "chests": chests,
+            "chestsTotal": watch_ids.len().min(6),
+            "subs": subs,
+            "subsTotal": sub_ids.len().min(6),
+            "finalEarned": final_earned,
+            "chains": chains,
+            "earnedNames": campaign_earned_names,
+        }));
     }
     let logged_in = auth.get("token").is_some() || tauri_auth.get("token").is_some();
     let login = if tauri_auth.get("login").is_some() {
@@ -2350,6 +2776,7 @@ fn snapshot_from_profile() -> Value {
         "campaigns": campaigns,
         "logs": LOGS.lock().unwrap().clone(),
         "badges": badges,
+        "collections": collections,
         "badges": badges,
         "device": DEVICE.lock().unwrap().clone(),
         "catalog": Value::Null,
@@ -2385,6 +2812,49 @@ fn save_settings(value: &Value) -> Result<(), String> {
         serde_json::to_string_pretty(value).map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())
+}
+
+/// Сколько минут в какой день смотрели категорию — для оценки следующей цепочки.
+/// Сессия «дня» GTA: стартует вручную, копит 60 минут и закрывается.
+fn bump_gta_day(slug: &str, minutes: f64) {
+    if slug != "grand-theft-auto-vi" && slug != "local:bratishkinoff" {
+        return;
+    }
+    let mut settings = load_settings();
+    let Some(root) = settings.as_object_mut() else { return };
+    let day = root.entry("gtaDay").or_insert_with(|| json!({}));
+    let Some(day) = day.as_object_mut() else { return };
+    if day.get("startedAt").and_then(Value::as_str).is_none() {
+        return;
+    }
+    if day.get("completedAt").and_then(Value::as_str).is_some() {
+        return;
+    }
+    let watched = day.get("watched").and_then(Value::as_f64).unwrap_or(0.0) + minutes;
+    day.insert("watched".into(), json!(watched.min(600.0)));
+    if watched >= 60.0 {
+        day.insert("completedAt".into(), json!(chrono::Utc::now().to_rfc3339()));
+    }
+    let _ = save_settings(&settings);
+}
+
+fn record_watch_minute(slug: &str, minutes: f64) {
+    if slug.is_empty() {
+        return;
+    }
+    let mut settings = load_settings();
+    let date = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let Some(root) = settings.as_object_mut() else { return };
+    let days = root
+        .entry("watchDays")
+        .or_insert_with(|| json!({}))
+        .as_object_mut();
+    let Some(days) = days else { return };
+    let entry = days.entry(slug.to_string()).or_insert_with(|| json!({}));
+    let Some(bucket) = entry.as_object_mut() else { return };
+    let current = bucket.get(&date).and_then(Value::as_f64).unwrap_or(0.0);
+    bucket.insert(date, json!((current + minutes).min(600.0)));
+    let _ = save_settings(&settings);
 }
 
 fn settings_games() -> Vec<String> {

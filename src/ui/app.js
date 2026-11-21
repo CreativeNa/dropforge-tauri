@@ -58,7 +58,9 @@ const esc = (value) =>
 const clamp01 = (value) => Math.max(0, Math.min(1, Number(value) || 0));
 
 function boxArt(game) {
-  return game?.boxArtUrl ?? null;
+  if (game?.boxArtUrl) return game.boxArtUrl;
+  if (/gtavi/i.test(game?.name ?? '')) return 'https://static-cdn.jtvnw.net/ttv-boxart/1867279146_IGDB-285x380.jpg';
+  return null;
 }
 
 function percent(value) {
@@ -382,12 +384,16 @@ function liveProgress() {
   </div>`;
   }
 
-  const drops = [...campaign.drops].sort((a, b) => a.requiredMinutes - b.requiredMinutes);
+  const collection = (state.snapshot.collections ?? []).find((item) => item.gameSlug === campaign.game.slug);
+  const drops = [...campaign.drops]
+    .filter((drop) => Number(drop.requiredSubs ?? 0) <= 0)
+    .sort((a, b) => a.requiredMinutes - b.requiredMinutes);
   const active =
     drops.find((drop) => !drop.isClaimed && drop.progress < 1) ?? drops[drops.length - 1] ?? null;
   const next = active ? drops.find((drop) => !drop.isClaimed && drop.id !== active.id) : null;
   const remaining = active ? Math.max(0, active.requiredMinutes - active.currentMinutes) : 0;
   const percent = active ? Math.round(Math.min(1, active.progress) * 100) : 0;
+  const nextChainName = (collection?.chains ?? []).find((chain) => !chain.earned)?.name ?? '';
 
   return `
   <div class="live-card" data-action="open-game" data-slug="${esc(campaign.game.slug)}" role="button" tabindex="0" title="Открыть карточку игры">
@@ -409,22 +415,22 @@ function liveProgress() {
     <div class="live-drop">
       <div class="live-drop-title">
         ${active.benefits?.[0]?.imageUrl ? `<img class="live-drop-art" src="${esc(active.benefits[0].imageUrl)}" alt="" loading="lazy" data-fallback />` : ''}
-        <div class="live-drop-name" title="${esc(active.name)}">${esc(active.name)}</div>
+        <div class="live-drop-name" title="${esc(collection ? `Ежедневный сундук · цепочек ${collection.chests}/${collection.chestsTotal}` : active.name)}">${esc(collection ? `Ежедневный сундук · цепочек ${collection.chests}/${collection.chestsTotal}` : active.name)}</div>
       </div>
-      <div class="bar ${active.isClaimed ? 'ok' : ''}"><i style="width:${percent}%"></i></div>
+      ${collection ? '' : `<div class="bar ${active.isClaimed ? 'ok' : ''}"><i style="width:${percent}%"></i></div>`}
       <div class="live-row">
-        <span class="live-minutes">${active.currentMinutes}/${active.requiredMinutes} мин</span>
-        <span class="live-percent">${percent}%</span>
+        <span class="live-minutes">${collection ? `цепочки ${collection.chests}/${collection.chestsTotal} · подписки ${collection.subs}/${collection.subsTotal}` : `${active.currentMinutes}/${active.requiredMinutes} мин`}</span>
+        ${collection ? '' : `<span class="live-percent">${percent}%</span>`}
       </div>
       <div class="live-row">
-        <span class="live-left">${remaining > 0 ? `ещё ~${formatMinutes(remaining)}` : 'готово к получению'}</span>
+        <span class="live-left">${collection ? (nextChainName ? `следующая цепочка: ${esc(nextChainName)}` : 'все цепочки получены') : (remaining > 0 ? `ещё ~${formatMinutes(remaining)}` : 'готово к получению')}</span>
         <span class="live-left">${campaign.endsAt ? 'до ' + formatDate(campaign.endsAt) : ''}</span>
       </div>
     </div>`
         : ''
     }
 
-    ${next ? `<div class="live-next">Далее: ${esc(next.name)} · ${next.requiredMinutes} мин</div>` : ''}
+    ${collection ? '' : next ? `<div class="live-next">Далее: ${esc(next.name)} · ${next.requiredMinutes} мин</div>` : ''}
   </div>`;
 }
 
@@ -531,6 +537,11 @@ function topbar() {
 function tabCampaigns() {
   const campaigns = state.snapshot.campaigns ?? [];
   const local = state.dropsTab === 'local';
+  if (local) {
+    const checked = state.snapshot.settings?.localCheck;
+    if (!checked?.login) return [];
+    return campaigns.filter((campaign) => campaign.local && campaign.channel?.login === checked.login);
+  }
   return campaigns.filter((campaign) => Boolean(campaign.local) === local);
 }
 
@@ -591,12 +602,13 @@ function localChannelsBlock() {
   const settings = state.snapshot.settings ?? {};
   const current = settings.localChannel ?? '';
   const checked = settings.localCheck;
+  const foundNow = (state.snapshot.campaigns ?? []).filter((campaign) => campaign.local && campaign.channel?.login === current).length;
   const chip = current
     ? `<span class="channel-chip">${esc(current)}<button class="channel-remove" data-action="local-clear" title="Сбросить канал">${ICONS.close}</button></span>`
     : '';
   let notice = '';
-  if (checked && checked.found) {
-    notice = `<div class="local-note ok">Канал <b>${esc(checked.login)}</b>: найдено кампаний — ${checked.found}.</div>`;
+  if (checked && foundNow > 0) {
+    notice = `<div class="local-note ok">Канал <b>${esc(checked.login)}</b>: найдено кампаний — ${foundNow}.</div>`;
   } else if (checked) {
     const at = checked.at ? new Date(checked.at).toLocaleTimeString('ru-RU') : '';
     notice = `<div class="local-note warn">У канала <b>${esc(checked.login)}</b> сейчас нет локальных дропсов.${at ? ` Проверено в ${at}.` : ''}</div>`;
@@ -617,6 +629,14 @@ function localChannelsBlock() {
  * лишние — иначе на каждую букву пересоздавались бы элементы и картинки,
  * из-за чего сетка дёргалась.
  */
+function localSection() {
+  return `
+    <div class="empty" style="min-height:420px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
+      <h3 style="font-size:18px">В разработке</h3>
+      <p>Локальные дропсы пока недоступны — раздел в разработке.</p>
+    </div>`;
+}
+
 function gamesSection() {
   const local = state.dropsTab === 'local';
   const games = sortedGames();
@@ -657,9 +677,13 @@ function catalogNotice(snapshot) {
 
 function dropsView() {
   const snapshot = state.snapshot;
+  const local = state.dropsTab === 'local';
   const campaigns = snapshot.campaigns ?? [];
   const globalCount = campaigns.filter((campaign) => !campaign.local).length;
-  const localCount = campaigns.filter((campaign) => campaign.local).length;
+  const checkedLogin = snapshot.settings?.localCheck?.login;
+  const localCount = checkedLogin
+    ? campaigns.filter((campaign) => campaign.local && campaign.channel?.login === checkedLogin).length
+    : 0;
 
   return `
   <div class="stats-row">
@@ -681,12 +705,17 @@ function dropsView() {
 
   ${catalogNotice(snapshot)}
 
-  <div id="games-section">${gamesSection()}</div>`;
+  ${local ? localSection() : `<div id="games-section">${gamesSection()}</div>`}`;
 }
 
 function gameCard(game, { hidden = false } = {}) {
   const art = boxArt(game);
-  const ratio = game.totalDrops ? game.claimedDrops / game.totalDrops : 0;
+  const collection =
+    (state.snapshot.collections ?? []).find((item) => item.gameSlug === game.slug) ??
+    (state.snapshot.collections ?? []).find((item) => item.campaign === game.name);
+  const totalDrops = collection ? collection.chestsTotal + collection.subsTotal : game.totalDrops;
+  const claimedDrops = collection ? collection.chests + collection.subs : game.claimedDrops;
+  const ratio = totalDrops ? claimedDrops / totalDrops : 0;
   const ends = game.endsAt ? new Date(game.endsAt).getTime() - Date.now() : Infinity;
   const soon = ends < 48 * 3600 * 1000;
 
@@ -704,7 +733,7 @@ function gameCard(game, { hidden = false } = {}) {
       <div class="game-title" title="${esc(game.name)}">${esc(game.name)}</div>
       <div class="game-progress">
         <span class="bar ${ratio >= 1 ? 'ok' : ''}"><i style="width:${percent(ratio)}"></i></span>
-        <span class="count">${game.claimedDrops}/${game.totalDrops}</span>
+        <span class="count">${claimedDrops}/${totalDrops}</span>
       </div>
       <div class="game-foot">
         <span class="game-ends ${soon ? 'soon' : ''}">${soon ? 'осталось ' + esc(formatLeft(new Date(game.endsAt).toISOString())) : 'до ' + esc(formatDate(game.endsAt))}</span>
@@ -736,8 +765,9 @@ function sheet() {
     ? campaigns.map(campaignBlock).join('')
     : '<div class="empty"><h3>Кампаний нет</h3><p>Для этой игры сейчас не проводятся Drops.</p></div>';
 
-  const totalDrops = campaigns.reduce((sum, campaign) => sum + campaign.drops.length, 0);
-  const claimed = campaigns.reduce(
+  const collection = (state.snapshot.collections ?? []).find((item) => item.gameSlug === game.slug);
+  const totalDrops = collection ? collection.chestsTotal + collection.subsTotal : campaigns.reduce((sum, campaign) => sum + campaign.drops.length, 0);
+  const claimed = collection ? collection.chests + collection.subs : campaigns.reduce(
     (sum, campaign) => sum + campaign.drops.filter((drop) => drop.isClaimed).length,
     0,
   );
@@ -772,9 +802,43 @@ function sheet() {
   </aside>`;
 }
 
+function renderGtaDay(collection) {
+  const day = collection.gtaDay ?? {};
+  const watched = Math.round(Number(day.watched ?? 0));
+  const started = day.startedAt;
+  const completed = day.completedAt;
+  const nextAt = completed ? new Date(completed).getTime() + 24 * 60 * 60 * 1000 : 0;
+  const now = Date.now();
+  if (started && !completed && watched < 60) {
+    return `<div style="margin-top:6px">Идёт день: ${watched}/60 мин · следующий сундук откроется через 24 часа после закрытия</div>`;
+  }
+  if (completed && nextAt > now) {
+    const left = Math.ceil((nextAt - now) / 60000);
+    const hours = Math.floor(left / 60);
+    const mins = left % 60;
+    return `<div style="margin-top:6px">Сундук дня получен · следующий день через ${hours} ч ${mins} мин <button class="btn-ghost small" data-action="gta-start-day">Начать раньше</button></div>`;
+  }
+  return `<div style="margin-top:6px">Доступен следующий день для просмотра — <button class="btn-primary small" data-action="gta-start-day">Начать день</button> · отсчёт пойдёт с этого момента</div>`;
+}
+
 function campaignBlock(campaign) {
-  const watchDrops = campaign.drops.filter((drop) => Number(drop.requiredSubs ?? 0) <= 0);
-  const subDrops = campaign.drops.filter((drop) => Number(drop.requiredSubs ?? 0) > 0);
+  const collection = (state.snapshot.collections ?? []).find((item) => item.campaignId === campaign.id);
+  const isGta = /gtavi/i.test(campaign.name ?? '');
+  const watchDrops = campaign.drops
+    .filter((drop) => Number(drop.requiredSubs ?? 0) <= 0)
+    .map((drop) => {
+      if (isGta && /сундук/i.test(drop.name ?? '')) {
+        const done = Number(collection?.chests ?? 0);
+        return { ...drop, name: `Ежедневный сундук с цепочкой · получено ${done} из 6`, note: 'Проверяйте прогресс на Twitch' };
+      }
+      return drop;
+    });
+  const subDrops = campaign.drops
+    .filter((drop) => Number(drop.requiredSubs ?? 0) > 0)
+    .map((drop) => ({
+      ...drop,
+      earned: (collection?.earnedNames ?? []).some((name) => name === drop.name),
+    }));
   const groupHead = (text) =>
     `<div style="margin:14px 2px 8px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.65">${text}</div>`;
   const drops = [
@@ -796,6 +860,17 @@ function campaignBlock(campaign) {
     notes.push(`<p class="campaign-note">Нужна привязка аккаунта: без неё Twitch не засчитывает минуты. <button class="btn-ghost small" data-action="open-url" data-url="${esc(campaign.linkUrl)}">Привязать аккаунт</button></p>`);
   }
   const note = notes.join('');
+  const collectionNote = collection
+    ? `<div class="campaign-note">
+        <div>Коллекция: сундуки ${collection.chests}/${collection.chestsTotal} · подписки ${collection.subs}/${collection.subsTotal} · финальная награда: ${collection.finalEarned ? 'получена' : 'нет'}</div>
+        ${collection.gtaDay !== undefined ? renderGtaDay(collection) : ''}
+        ${collection.chains?.length
+          ? `<div style="margin-top:8px;display:flex;gap:12px;flex-wrap:wrap">${collection.chains
+              .map((chain) => `<span style="display:inline-flex;align-items:center;gap:6px;opacity:${chain.earned ? 1 : 0.4}">${chain.imageUrl ? `<img src="${esc(chain.imageUrl)}" alt="" style="width:22px;height:22px" />` : (chain.earned ? '✔' : '✖')} ${esc(chain.name)}</span>`)
+              .join('')}</div>`
+          : ''}
+      </div>`
+    : '';
   return `
   <section class="campaign">
     <div class="campaign-head">
@@ -804,6 +879,7 @@ function campaignBlock(campaign) {
       <div class="campaign-time">до ${esc(formatDate(campaign.endsAt))}</div>
     </div>
     ${note}
+    ${collectionNote}
     ${drops}
   </section>`;
 }
@@ -819,7 +895,12 @@ function subsWord(count) {
 
 function dropRow(drop) {
   const subs = Number(drop.requiredSubs ?? 0);
-  const label = drop.isClaimed
+  const note = String(drop.note ?? "").trim();
+  const label = drop.earned
+    ? '<span class="drop-status done">получено</span>'
+    : note && !drop.isClaimed
+    ? '<span class="drop-status"></span>'
+    : drop.isClaimed
     ? '<span class="drop-status done">получено</span>'
     : drop.canClaim
       ? '<span class="drop-status ready">готово</span>'
@@ -833,7 +914,11 @@ function dropRow(drop) {
   const rewardName = drop.benefits?.[0]?.name ?? drop.name;
 
   // у кампаний-наград прогресс считает Twitch, локально его не видно
-  const progress = subs > 0
+  const progress = drop.earned
+    ? '<span>награда уже на аккаунте</span>'
+    : note
+    ? `<span>${esc(note)}</span>`
+    : subs > 0
     ? '<span>награда за подписку на канал</span>'
     : drop.reward
     ? '<span>часы считает Twitch — забери награду на twitch.tv/drops/rewards</span>'
@@ -1227,7 +1312,11 @@ const actions = {
       toast('Локальные дропсы доступны в Tauri-сборке', 'error');
       return;
     }
-    const login = form.querySelector('input[name="login"]')?.value?.trim();
+    const raw = form.querySelector('input[name="login"]')?.value?.trim() ?? '';
+    const login = raw
+      .replace(/^https?:\/\/(www\.)?twitch\.tv\//i, '')
+      .split(/[\/?#]/)[0]
+      .trim();
     if (!login) return;
     await withBusy('local', async () => {
       const snapshot = await api.localCheckChannel(login);
@@ -1366,6 +1455,43 @@ const actions = {
     } catch (error) {
       toast('Отчёт: ' + error.message, 'error');
     }
+  },
+
+  async 'gta-start-day'() {
+    const now = new Date().toISOString();
+    const snapshot = await api.saveSettings({ gtaDay: { startedAt: now, watched: 0, completedAt: null } });
+    if (snapshot?.ready) applySnapshot(snapshot);
+    render();
+    // приоритет: Bratishkinoff до 2 декабря, иначе обычный автофарм категории
+    const local = await api.farmGame('local:bratishkinoff');
+    let resultSnap = local;
+    if (!local?.status?.running) {
+      const fallback = await api.farmGame('grand-theft-auto-vi');
+      if (fallback?.ready) resultSnap = fallback;
+    }
+    if (resultSnap?.ready) applySnapshot(resultSnap);
+    render();
+  },
+
+  async 'close-day'() {
+    const collection = (state.snapshot?.collections ?? []).find((item) => item.chains?.length);
+    const slug = collection?.gameSlug ?? 'grand-theft-auto-vi';
+    const today = new Date().toISOString().slice(0, 10);
+    const closed = { ...(state.snapshot?.settings?.closedDays ?? {}) };
+    closed[slug] = today;
+    delete closed['undefined'];
+    const snapshot = await api.saveSettings({ closedDays: closed });
+    if (snapshot?.ready) applySnapshot(snapshot);
+    render();
+  },
+
+  async 'gta-chains'(target) {
+    const delta = Number(target?.dataset?.delta ?? 0);
+    const current = (state.snapshot?.collections ?? []).find((item) => item.chains?.length);
+    const value = Math.max(0, Math.min(6, Number(current?.chests ?? 0) + delta));
+    const snapshot = await api.saveSettings({ gtaChains: value });
+    if (snapshot?.ready) applySnapshot(snapshot);
+    render();
   },
 
   async 'open-url'(target) {

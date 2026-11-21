@@ -750,7 +750,7 @@ dependencies = [
 
 [[package]]
 name = "dropforge-tauri"
-version = "1.3.11"
+version = "1.3.12"
 dependencies = [
  "chrono",
  "serde_json",
