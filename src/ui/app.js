@@ -1036,8 +1036,8 @@ function settingsView() {
           <textarea id="problem-text" placeholder="Что случилось?" style="width:100%;min-height:64px;margin-top:8px;background:var(--panel-3);color:var(--fg);border:1px solid var(--line-soft);border-radius:10px;padding:10px;font:inherit;resize:vertical"></textarea>
         </div>
       </div>
-      <div class="row">
-        <div class="row-hint">Приложенный файл можно отправить в чат или на GitHub</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
+        <div class="row-hint" style="max-width:420px">Файл с отчётом можно отправить в чат или на GitHub</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn-ghost" data-action="copy-summary">Краткая сводка</button>
           <button class="btn-primary" data-action="report-issue">Сообщить о проблеме</button>
