@@ -1558,9 +1558,52 @@ fn gql_value(token: &str, operation: &str, hash: &str, variables: Value) -> Opti
 
 /// Живой канал категории с включёнными Drops: берём самого «дешёвого».
 /// Кампании с allow.channels: смотреть можно только разрешённый канал.
-fn allowed_channel_for(slug: &str) -> Option<(String, String)> {
+fn gql_raw(token: &str, query: &str, variables: Value) -> Option<Value> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+        .build()
+        .new_agent();
+    let mut request = agent
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", "kimne78kx3ncx6brgo4mv6wki5h1ko")
+        .header("Content-Type", "application/json")
+        .header("Origin", "https://www.twitch.tv");
+    if !token.is_empty() {
+        request = request.header("Authorization", &format!("OAuth {token}"));
+    }
+    let response: Value = request
+        .send(json!({ "query": query, "variables": variables }).to_string())
+        .ok()?
+        .body_mut()
+        .read_json()
+        .ok()?;
+    Some(response)
+}
+
+/// У кампании есть список разрешённых каналов (не «все каналы категории»).
+fn has_allowed_channels(slug: &str) -> bool {
+    let Some(cache) = read_json(profile_dir().join("catalog-cache.json")) else { return false };
+    let campaigns = cache.get("campaigns").and_then(Value::as_array).cloned().unwrap_or_default();
+    campaigns.iter().any(|campaign| {
+        let game_slug = campaign.get("game").and_then(|game| game.get("slug")).map(|value| text_of(Some(value))).unwrap_or_default();
+        if game_slug != slug {
+            return false;
+        }
+        campaign
+            .get("allow")
+            .and_then(|allow| allow.get("channels"))
+            .and_then(Value::as_array)
+            .map(|channels| !channels.is_empty())
+            .unwrap_or(false)
+    })
+}
+
+/// Канал из списка разрешённых, который сейчас реально в эфире.
+fn allowed_channel_for(token: &str, slug: &str) -> Option<(String, String)> {
     let cache = read_json(profile_dir().join("catalog-cache.json"))?;
     let campaigns = cache.get("campaigns").and_then(Value::as_array)?;
+    let mut candidates: Vec<(String, String)> = Vec::new();
     for campaign in campaigns {
         let game_slug = campaign
             .get("game")
@@ -1580,8 +1623,28 @@ fn allowed_channel_for(slug: &str) -> Option<(String, String)> {
         for channel in channels {
             let id = text_of(channel.get("id"));
             let name = text_of(channel.get("name"));
-            if !id.is_empty() && !name.is_empty() {
-                return Some((id, name));
+            if !id.is_empty() && !name.is_empty() && !candidates.iter().any(|(_, login)| login == &name) {
+                candidates.push((id, name));
+            }
+        }
+    }
+    // проверяем живость пачками по 20: у Twitch нет массового фильтра по списку каналов
+    for chunk in candidates.chunks(20) {
+        let mut query = String::from("query {");
+        for (index, (_, login)) in chunk.iter().enumerate() {
+            query.push_str(&format!(" a{index}: user(login:\"{login}\") {{ stream {{ id }} }}",));
+        }
+        query.push_str(" }");
+        let Some(response) = gql_raw(token, &query, json!({})) else { continue };
+        let Some(data) = response.get("data") else { continue };
+        for (index, (id, login)) in chunk.iter().enumerate() {
+            let live = data
+                .get(format!("a{index}"))
+                .and_then(|user| user.get("stream"))
+                .map(|stream| !stream.is_null())
+                .unwrap_or(false);
+            if live {
+                return Some((id.clone(), login.clone()));
             }
         }
     }
@@ -1595,8 +1658,13 @@ fn pick_channel(token: &str, slug: &str) -> Option<(String, String)> {
         return Some((id, login.to_string()));
     }
     // кампания, ограниченная списком каналов: берём первый из разрешённых
-    if let Some(found) = allowed_channel_for(slug) {
+    let restricted = has_allowed_channels(slug);
+    if let Some(found) = allowed_channel_for(token, slug) {
         return Some(found);
+    }
+    // если список есть, но никто не в эфире — чужие каналы не помогут: прогресс не засчитают
+    if restricted {
+        return None;
     }
     // сначала ищем каналы с включёнными Drops, затем любые живые в категории:
     // у кампаний-наград (QUEST_REWARD) фильтр DROPS_ENABLED часто не выставлен
@@ -1686,7 +1754,13 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
         pick_channel(&token, slug)
     };
     let Some((channel_id, login)) = channel else {
-        return json!({ "error": format!("нет живых каналов с Drops для {slug}") });
+        let message = if has_allowed_channels(slug) {
+            format!("нет живых каналов: у кампании {slug} свой список стримеров, сейчас никто не в эфире")
+        } else {
+            format!("нет живых каналов с Drops для {slug}")
+        };
+        push_log("warn", message.clone());
+        return json!({ "error": message });
     };
 
     let mut guard = CHILD.lock().unwrap();
