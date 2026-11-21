@@ -1,0 +1,1497 @@
+const api = window.dropforge ?? null;
+
+/* ------------------------------------------------------------------ icons */
+
+const ICONS = {
+  logo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6"/><path d="M5 8h14l-1.5 12.5a2 2 0 0 1-2 1.5H8.5a2 2 0 0 1-2-1.5L5 8Z"/><path d="M9 12h6"/></svg>',
+  drops: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5 12 4l8 4.5v7L12 20l-8-4.5v-7Z"/><path d="M4 8.5 12 13l8-4.5M12 13v7"/></svg>',
+  log: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>',
+  gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.4-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 4a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.4l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21 11a2 2 0 1 1 0 4Z"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  refresh: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 4v5h-5"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5-11-6.5Z"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.6"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m5 13 4.5 4.5L19 7"/></svg>',
+  close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h4v16h-4"/><path d="M11 8l4 4-4 4M15 12H3"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.4-3 7.5-7 9-4-1.5-7-4.6-7-9V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>',
+  gift: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h16v10H4z"/><path d="M2 6h20v4H2zM12 6v14"/><path d="M12 6S9.5 2 7.5 3.4C5.8 4.6 7 6 12 6Zm0 0s2.5-4 4.5-2.6C18.2 4.6 17 6 12 6Z"/></svg>',
+  folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v10H3z"/></svg>',
+  star: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="m12 3.7 2.5 5.1 5.6.8-4 4 1 5.6-5.1-2.7-5.1 2.7 1-5.6-4-4 5.6-.8Z"/></svg>',
+  starOn: '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="m12 3.7 2.5 5.1 5.6.8-4 4 1 5.6-5.1-2.7-5.1 2.7 1-5.6-4-4 5.6-.8Z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="5" width="4" height="14" rx="1.4"/><rect x="13" y="5" width="4" height="14" rx="1.4"/></svg>',
+  trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16"/><path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7"/><path d="M6.5 7 7.4 19a1.5 1.5 0 0 0 1.5 1.4h6.2a1.5 1.5 0 0 0 1.5-1.4L17.5 7"/><path d="M10.5 11v5.5M13.5 11v5.5"/></svg>',
+};
+
+/* ------------------------------------------------------------------- state */
+
+let pendingSheetGame = null;
+
+const state = {
+  snapshot: null,
+  view: 'drops',
+  query: '',
+  dropsTab: 'global',
+  sheetGame: null,
+  busy: new Set(),
+  device: null,
+  error: null,
+  demo: false,
+  loading: true,
+  scrollTop: 0,
+  appVersion: null,
+};
+
+/* ----------------------------------------------------------------- helpers */
+
+const esc = (value) =>
+  String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+
+const clamp01 = (value) => Math.max(0, Math.min(1, Number(value) || 0));
+
+function boxArt(game) {
+  return game?.boxArtUrl ?? null;
+}
+
+function percent(value) {
+  return `${Math.round(clamp01(value) * 100)}%`;
+}
+
+function formatLeft(iso) {
+  if (!iso) return 'без срока';
+  const diff = new Date(iso).getTime() - Date.now();
+  if (Number.isNaN(diff)) return 'без срока';
+  if (diff <= 0) return 'завершено';
+  const totalMinutes = Math.floor(diff / 60000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `${days} д ${hours} ч`;
+  if (hours > 0) return `${hours} ч ${minutes} мин`;
+  return `${Math.max(1, minutes)} мин`;
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' }).format(new Date(iso));
+}
+
+function formatMinutes(minutes) {
+  const total = Math.max(0, Math.round(minutes));
+  const hours = Math.floor(total / 60);
+  const rest = total % 60;
+  if (hours && rest) return `${hours} ч ${rest} м`;
+  if (hours) return `${hours} ч`;
+  return `${rest} м`;
+}
+
+function initials(name) {
+  return String(name ?? '?')
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((word) => word[0] ?? '')
+    .join('')
+    .toUpperCase();
+}
+
+function toast(message, kind = 'info') {
+  const host = document.getElementById('toasts');
+  if (!host) return;
+  const node = document.createElement('div');
+  node.className = `toast ${kind === 'info' ? '' : kind}`;
+  node.textContent = message;
+  host.append(node);
+  setTimeout(() => node.remove(), 5200);
+}
+
+function setBusy(key, value) {
+  if (value) state.busy.add(key);
+  else state.busy.delete(key);
+}
+
+function isBusy(key) {
+  return state.busy.has(key);
+}
+
+/* -------------------------------------------------------------------- data */
+
+function demoSnapshot() {
+  const now = Date.now();
+  const iso = (msFromNow) => new Date(now + msFromNow).toISOString();
+
+  const make = (game, campaign, drops) => ({
+    id: `${game.slug}-${campaign}`,
+    name: campaign,
+    status: 'ACTIVE',
+    game: {
+      id: game.id,
+      name: game.name,
+      slug: game.slug,
+      boxArtUrl: `https://static-cdn.jtvnw.net/ttv-boxart/${game.id}-285x380.jpg`,
+    },
+    startsAt: iso(-86400000 * 3),
+    endsAt: iso(game.endsIn),
+    linked: true,
+    allowedChannelCount: 0,
+    selected: game.selected ?? false,
+    farming: game.slug === 'fortnite',
+    drops: drops.map((drop, index) => {
+      const required = drop.required;
+      const current = drop.current;
+      const done = current >= required;
+      return {
+        id: `${game.slug}-${campaign}-${index}`,
+        name: drop.name,
+        currentMinutes: current,
+        requiredMinutes: required,
+        remainingMinutes: Math.max(0, required - current),
+        progress: clamp01(current / required),
+        isClaimed: Boolean(drop.claimed),
+        canClaim: done && !drop.claimed,
+        startsAt: iso(-86400000 * 3),
+        endsAt: iso(game.endsIn),
+        benefits: [{ id: `${index}`, name: drop.name, type: 'DIRECT_ENTITLEMENT', imageUrl: null }],
+      };
+    }),
+  });
+
+  const games = [
+    { id: 33214, name: 'Fortnite', slug: 'fortnite', endsIn: 86400000 * 4, selected: true },
+    { id: 512710, name: 'Call of Duty: Warzone', slug: 'call-of-duty-warzone', endsIn: 86400000 * 11, selected: true },
+    { id: 21779, name: 'League of Legends', slug: 'league-of-legends', endsIn: 86400000 * 2 },
+    { id: 516575, name: 'VALORANT', slug: 'valorant', endsIn: 86400000 * 7 },
+    { id: 511224, name: 'Apex Legends', slug: 'apex-legends', endsIn: 86400000 * 1 },
+    { id: 263490, name: 'Rust', slug: 'rust', endsIn: 86400000 * 18 },
+    { id: 32982, name: 'Grand Theft Auto V', slug: 'grand-theft-auto-v', endsIn: 86400000 * 6 },
+    { id: 27471, name: 'Minecraft', slug: 'minecraft', endsIn: 86400000 * 9 },
+  ];
+
+  const campaigns = [
+    make(games[0], 'Fortnite Drops: Remix', [
+      { name: 'Эмоция «Rift Rider»', required: 30, current: 30, claimed: true },
+      { name: 'Облик «Neon Drift»', required: 60, current: 47 },
+      { name: 'Кирка «Starforge»', required: 120, current: 12 },
+    ]),
+    make(games[1], 'Warzone: Season Rewards', [
+      { name: 'Чертёж «Blackout»', required: 60, current: 60 },
+      { name: 'Визитка «Ghost»', required: 180, current: 64 },
+    ]),
+    make(games[2], 'LoL: Prime Gaming', [
+      { name: 'Сундук с наградой', required: 45, current: 45, claimed: true },
+      { name: 'Эмблема «Rift»', required: 90, current: 21 },
+    ]),
+    make(games[3], 'VALORANT: Champion Drops', [
+      { name: 'Спрей «Ace»', required: 30, current: 30, claimed: true },
+      { name: 'Карточка «Lotus»', required: 60, current: 8 },
+      { name: 'Титул «Clutch»', required: 90, current: 0 },
+    ]),
+    make(games[4], 'Apex: Legends Rewards', [{ name: 'Облик «Voidwalker»', required: 120, current: 96 }]),
+    make(games[5], 'Rust: Twitch Drops', [
+      { name: 'Скин «Molten»', required: 240, current: 120 },
+      { name: 'Ящик «Scrap»', required: 60, current: 60, claimed: true },
+    ]),
+    make(games[6], 'GTA Online: Rewards', [{ name: 'Футболка «Neon»', required: 60, current: 33 }]),
+    make(games[7], 'Minecraft: Creator Drops', [{ name: 'Плащ «Enderman»', required: 45, current: 45, claimed: true }]),
+  ];
+
+  const gameSummary = new Map();
+  for (const campaign of campaigns) {
+    const key = campaign.game.slug;
+    if (!gameSummary.has(key)) {
+      gameSummary.set(key, {
+        slug: key,
+        name: campaign.game.name,
+        boxArtUrl: campaign.game.boxArtUrl,
+        campaignIds: [],
+        totalDrops: 0,
+        claimedDrops: 0,
+        endsAt: campaign.endsAt,
+        active: true,
+        canEarn: true,
+        selected: games.find((game) => game.slug === key)?.selected ?? false,
+        farming: key === 'fortnite',
+      });
+    }
+    const summary = gameSummary.get(key);
+    summary.campaignIds.push(campaign.id);
+    summary.totalDrops += campaign.drops.length;
+    summary.claimedDrops += campaign.drops.filter((drop) => drop.isClaimed).length;
+  }
+
+  const allDrops = campaigns.flatMap((campaign) => campaign.drops);
+
+  return {
+    ready: true,
+    demo: true,
+    auth: { loggedIn: true, user: { login: 'dropforge_demo', displayName: 'dropforge_demo' }, profile: 'web' },
+    status: {
+      state: 'watching',
+      running: true,
+      message: 'Смотрю стрим',
+      game: 'Fortnite',
+      channel: { login: 'ninja_live', displayName: 'NinjaLive', viewers: 1240, url: 'https://twitch.tv/ninja_live' },
+    },
+    pubsub: 'online',
+    lastRefresh: new Date().toISOString(),
+    settings: { games: ['fortnite', 'call-of-duty-warzone'], sendSpadeEvents: true, autoClaim: true, refreshMinutes: 10 },
+    stats: {
+      games: gameSummary.size,
+      campaigns: campaigns.length,
+      drops: allDrops.length,
+      claimed: allDrops.filter((drop) => drop.isClaimed).length,
+      claimable: allDrops.filter((drop) => drop.canClaim).length,
+      minutesEarned: allDrops.reduce((sum, drop) => sum + drop.currentMinutes, 0),
+    },
+    games: [...gameSummary.values()],
+    campaigns,
+    logs: [
+      { at: new Date(now - 120000).toISOString(), level: 'info', message: 'Загружено кампаний: 8, дропов: 19' },
+      { at: new Date(now - 90000).toISOString(), level: 'success', message: 'Награда получена: Сундук с наградой (League of Legends)' },
+      { at: new Date(now - 60000).toISOString(), level: 'info', message: 'Смотрю ninja_live — прогресс +1 мин' },
+    ],
+  };
+}
+
+/* ---------------------------------------------------------------- auth view */
+
+function authScreen() {
+  const error = state.error ? `<div class="error-box">${esc(state.error)}</div>` : '';
+  const device = state.device
+    ? `<div class="device-code">
+         <div class="device-label">Код подтверждения</div>
+         <div class="code">${esc(state.device.userCode)}</div>
+         <div class="device-status"><span class="spinner"></span> Ждём подтверждения в браузере…</div>
+         <div class="hint">
+           Браузер уже открыт. Если нет —
+           <button type="button" class="link" data-action="open-activation">откройте twitch.tv/activate</button>
+           и введите код.
+         </div>
+         <button type="button" class="btn-ghost small" data-action="cancel-device">Отмена</button>
+       </div>`
+    : '';
+
+  return `
+  <div class="auth-screen">
+    <div class="auth-left">
+      <div class="auth-brand">
+        <div class="brand-mark">${ICONS.logo}</div>
+        <div class="brand-text">
+          <span class="brand-name">DropForge</span>
+          <span class="brand-sub">twitch drops automation</span>
+        </div>
+      </div>
+      <h1 class="auth-title">Дропы копятся, <em>пока вы заняты</em> другими делами</h1>
+      <p class="auth-lead">
+        Выберите игру — приложение само найдёт стрим с включёнными Drops, будет смотреть его
+        и заберёт награды. Без открытых вкладок и без скачивания видео.
+      </p>
+      <div class="auth-points">
+        <div class="auth-point">${ICONS.drops}<span><b>Любая игра с Drops.</b> Кампании и прогресс подтягиваются из вашего аккаунта.</span></div>
+        <div class="auth-point">${ICONS.bolt}<span><b>Смена стримера на лету.</b> Стрим закончился — приложение переключится само.</span></div>
+        <div class="auth-point">${ICONS.gift}<span><b>Награды забираются автоматически.</b> Как только дроп прокнул — он уже ваш.</span></div>
+        <div class="auth-point">${ICONS.shield}<span><b>Вход только на сайте Twitch.</b> Приложение не спрашивает пароль и не видит его.</span></div>
+      </div>
+    </div>
+    <div class="auth-right">
+      <form class="auth-card" data-action="login-token">
+        <h2>Подключите аккаунт Twitch</h2>
+        <p class="small">Нажмите «Войти» — откроется браузер, где вы уже вошли (или войдёте) на Twitch.</p>
+        ${error}
+        <button type="button" class="btn-primary wide" data-action="login-device" ${state.device ? 'disabled' : ''}>
+          ${ICONS.play} Войти через Twitch
+        </button>
+        <p class="auth-note">Подтвердите вход на странице Twitch — приложение получит доступ само, пароль вводить в него не нужно.</p>
+        ${device}
+        <div class="divider">или</div>
+        <button type="button" class="btn-ghost wide" data-action="login-browser">
+          ${ICONS.shield} Войти в окне приложения
+        </button>
+        <details class="auth-advanced">
+          <summary>Вход по токену</summary>
+          <div class="field">
+            <label for="token">OAuth-токен</label>
+            <input id="token" name="token" placeholder="Вставьте токен из cookie auth-token" autocomplete="off" spellcheck="false" />
+          </div>
+          <button type="submit" class="btn-ghost wide">${ICONS.shield} Войти по токену</button>
+        </details>
+      </form>
+    </div>
+  </div>`;
+}
+
+/* ------------------------------------------------------------------- shell */
+
+/** Очередь игр в панели автофарма — с возможностью убрать игру. */
+function queueBlock() {
+  const queue = [...state.snapshot.games].filter((game) => game.selected);
+  const running = Boolean(state.snapshot.status?.running);
+  const head = `
+    <div class="queue-head">
+      Очередь <span class="queue-count">${queue.length}</span>
+      <div class="queue-actions">
+        <button class="queue-icon toggle ${running ? 'stop' : 'start'}" data-action="${running ? 'stop' : 'start'}" title="${running ? 'Поставить на паузу' : 'Запустить автофарм'}" ${!running && !queue.length ? 'disabled' : ''}>${running ? ICONS.pause : ICONS.play}</button>
+        <button class="queue-icon danger" data-action="clear-queue" title="Очистить очередь" ${queue.length ? '' : 'disabled'}>${ICONS.trash}</button>
+      </div>
+    </div>`;
+
+  if (!queue.length) {
+    return `
+  <div class="queue">
+    ${head}
+    <div class="queue-empty">Очередь пуста — добавьте игру из списка</div>
+  </div>`;
+  }
+
+  const items = queue
+    .map(
+      (game) => `
+    <li class="queue-item" title="${esc(game.name)}">
+      <span class="queue-dot ${game.farming ? 'live' : ''}"></span>
+      <span class="queue-name">${esc(game.name)}</span>
+      <button class="queue-remove" data-action="toggle-game" data-slug="${esc(game.slug)}" title="Убрать из очереди">${ICONS.close}</button>
+    </li>`,
+    )
+    .join('');
+
+  return `
+  <div class="queue">
+    ${head}
+    <ul class="queue-list">${items}</ul>
+  </div>`;
+}
+
+/** Мини-панель прогресса текущего фарма — без открытия карточки игры. */
+function liveProgress() {
+  const snapshot = state.snapshot;
+  const campaign = snapshot.campaigns.find((item) => item.farming) ?? null;
+  const channel = snapshot.status?.channel ?? null;
+
+  if (!campaign) {
+    return `
+  <div class="live-card idle">
+    <div class="live-head">Прогресс</div>
+    <div class="live-empty">Фарм не запущен<br /><span>Выберите игру и нажмите «Фармить»</span></div>
+  </div>`;
+  }
+
+  const drops = [...campaign.drops].sort((a, b) => a.requiredMinutes - b.requiredMinutes);
+  const active =
+    drops.find((drop) => !drop.isClaimed && drop.progress < 1) ?? drops[drops.length - 1] ?? null;
+  const next = active ? drops.find((drop) => !drop.isClaimed && drop.id !== active.id) : null;
+  const remaining = active ? Math.max(0, active.requiredMinutes - active.currentMinutes) : 0;
+  const percent = active ? Math.round(Math.min(1, active.progress) * 100) : 0;
+
+  return `
+  <div class="live-card" data-action="open-game" data-slug="${esc(campaign.game.slug)}" role="button" tabindex="0" title="Открыть карточку игры">
+    <div class="live-head">Сейчас в фарме</div>
+    <div class="live-game">
+      ${campaign.game.boxArtUrl ? `<img class="live-art" src="${esc(campaign.game.boxArtUrl)}" alt="" loading="lazy" data-fallback />` : ''}
+      <div class="live-meta">
+        <div class="live-name">${esc(campaign.game.name)}</div>
+        <div class="live-status">
+          <span class="live-dot"></span>
+          ${channel ? esc(channel.login) : 'ищу стрим…'}
+        </div>
+      </div>
+    </div>
+
+    ${
+      active
+        ? `
+    <div class="live-drop">
+      <div class="live-drop-title">
+        ${active.benefits?.[0]?.imageUrl ? `<img class="live-drop-art" src="${esc(active.benefits[0].imageUrl)}" alt="" loading="lazy" data-fallback />` : ''}
+        <div class="live-drop-name" title="${esc(active.name)}">${esc(active.name)}</div>
+      </div>
+      <div class="bar ${active.isClaimed ? 'ok' : ''}"><i style="width:${percent}%"></i></div>
+      <div class="live-row">
+        <span class="live-minutes">${active.currentMinutes}/${active.requiredMinutes} мин</span>
+        <span class="live-percent">${percent}%</span>
+      </div>
+      <div class="live-row">
+        <span class="live-left">${remaining > 0 ? `ещё ~${formatMinutes(remaining)}` : 'готово к получению'}</span>
+        <span class="live-left">${campaign.endsAt ? 'до ' + formatDate(campaign.endsAt) : ''}</span>
+      </div>
+    </div>`
+        : ''
+    }
+
+    ${next ? `<div class="live-next">Далее: ${esc(next.name)} · ${next.requiredMinutes} мин</div>` : ''}
+  </div>`;
+}
+
+function sidebar() {
+  const snapshot = state.snapshot;
+  const { stats, status, auth } = snapshot;
+  const running = Boolean(status?.running);
+  const readyGames = snapshot.settings?.games?.length ?? 0;
+  const badgesFree = (snapshot.badges ?? []).filter(
+    (badge) => !badge.paid && !badge.claimed && Number(badge.requiredMinutes) > 0,
+  ).length;
+
+  return `
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">${ICONS.logo}</div>
+      <div class="brand-text">
+        <span class="brand-name">DropForge</span>
+        <span class="brand-sub">twitch drops</span>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <button class="nav-item ${state.view === 'drops' ? 'active' : ''}" data-action="nav" data-view="drops">
+        ${ICONS.drops} Дропы ${stats.claimable ? `<span class="nav-badge">${stats.claimable}</span>` : ''}
+      </button>
+      <button class="nav-item ${state.view === 'badges' ? 'active' : ''}" data-action="nav" data-view="badges">
+        ${ICONS.gift} Бейджи ${badgesFree ? `<span class="nav-badge">${badgesFree}</span>` : ''}
+      </button>
+      <button class="nav-item ${state.view === 'logs' ? 'active' : ''}" data-action="nav" data-view="logs">
+        ${ICONS.log} Журнал
+      </button>
+      <button class="nav-item ${state.view === 'settings' ? 'active' : ''}" data-action="nav" data-view="settings">
+        ${ICONS.gear} Настройки
+      </button>
+    </nav>
+
+    ${liveProgress()}
+
+    <div class="sidebar-spacer"></div>
+
+    <div class="farm-card">
+      ${queueBlock()}
+    </div>
+
+    <div class="account">
+      <div class="avatar">${esc(initials(auth?.user?.login))}</div>
+      <div class="account-meta">
+        <div class="account-name">${esc(auth?.user?.login ?? 'не подключён')}</div>
+        <div class="account-sub">${snapshot.pubsub === 'online' ? 'события Twitch: онлайн' : 'события Twitch: офлайн'}</div>
+      </div>
+      <button class="icon-btn" title="Выйти" data-action="logout">${ICONS.logout}</button>
+    </div>
+  </aside>`;
+}
+
+function topbar() {
+  const snapshot = state.snapshot;
+  const title =
+    state.view === 'drops'
+      ? 'Дропы'
+      : state.view === 'badges'
+        ? 'Бейджи'
+        : state.view === 'logs'
+          ? 'Журнал'
+          : 'Настройки';
+  const subtitle =
+    state.view === 'drops'
+      ? `${snapshot.stats.games} игр · ${snapshot.stats.campaigns} кампаний · ${snapshot.stats.drops} дропов`
+      : state.view === 'badges'
+        ? `Значки профиля Twitch · ${(snapshot.badges ?? []).filter((badge) => badge.claimed).length} из ${(snapshot.badges ?? []).length} получено`
+        : state.view === 'logs'
+        ? 'Что делает приложение прямо сейчас'
+        : 'Поведение автофарма и аккаунт';
+
+  const search =
+    state.view === 'drops'
+      ? `<div class="search">${ICONS.search}<input id="search" placeholder="Поиск игры" value="${esc(state.query)}" />${state.query ? '<button class="search-clear" data-action="clear-search" title="Сбросить фильтр">×</button>' : ''}</div>`
+      : '';
+
+  const refresh =
+    state.view === 'drops'
+      ? `<button class="btn-ghost" data-action="refresh" ${isBusy('refresh') ? 'disabled' : ''}>
+           ${isBusy('refresh') ? '<span class="spinner"></span>' : ICONS.refresh} Обновить
+         </button>`
+      : '';
+
+  return `
+  <header class="topbar">
+    <div>
+      <h1 class="page-title">${title}</h1>
+      <div class="page-sub">${subtitle}</div>
+    </div>
+    <div class="topbar-actions">
+      ${search}
+      ${refresh}
+    </div>
+  </header>`;
+}
+
+/* -------------------------------------------------------------- drops view */
+
+/** Кампании активной вкладки: глобальные или локальные (привязанные к каналу). */
+function tabCampaigns() {
+  const campaigns = state.snapshot.campaigns ?? [];
+  const local = state.dropsTab === 'local';
+  return campaigns.filter((campaign) => Boolean(campaign.local) === local);
+}
+
+/** Группирует кампании вкладки по игре — карточки строятся из них. */
+function groupedGames() {
+  const base = new Map((state.snapshot.games ?? []).map((game) => [game.slug, game]));
+  const bySlug = new Map();
+  for (const campaign of tabCampaigns()) {
+    const slug = campaign.game?.slug;
+    if (!slug) continue;
+    let game = bySlug.get(slug);
+    if (!game) {
+      game = {
+        slug,
+        name: campaign.game.name,
+        boxArtUrl: campaign.game.boxArtUrl,
+        totalDrops: 0,
+        claimedDrops: 0,
+        endsAt: null,
+        canEarn: false,
+        channels: new Set(),
+      };
+      bySlug.set(slug, game);
+    }
+    game.totalDrops += campaign.drops.length;
+    game.claimedDrops += campaign.drops.filter((drop) => drop.isClaimed).length;
+    game.canEarn = game.canEarn || Boolean(campaign.canEarn);
+    const end = campaign.endsAt ? new Date(campaign.endsAt) : null;
+    if (end && (!game.endsAt || end < game.endsAt)) game.endsAt = end;
+    if (campaign.channel?.login) game.channels.add(campaign.channel.login);
+    if (campaign.channel?.login) game.channel = campaign.channel.login;
+  }
+  return [...bySlug.values()].map((game) => ({
+    ...(base.get(game.slug) ?? {}),
+    ...game,
+    // локальная карточка не «награда за подписку» — показываем обычный статус дропсов
+    rewardOnly: false,
+    channels: [...game.channels],
+  }));
+}
+
+function sortedGames() {
+  return groupedGames().sort(
+    (a, b) =>
+      Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) ||
+      Number(b.farming) - Number(a.farming) ||
+      Number(b.canEarn) - Number(a.canEarn) ||
+      a.name.localeCompare(b.name),
+  );
+}
+
+function matchesQuery(game, query) {
+  return !query || game.name.toLowerCase().includes(query);
+}
+
+/** Один канал: проверка существования и локальных дропсов. */
+function localChannelsBlock() {
+  const settings = state.snapshot.settings ?? {};
+  const current = settings.localChannel ?? '';
+  const checked = settings.localCheck;
+  const chip = current
+    ? `<span class="channel-chip">${esc(current)}<button class="channel-remove" data-action="local-clear" title="Сбросить канал">${ICONS.close}</button></span>`
+    : '';
+  let notice = '';
+  if (checked && checked.found) {
+    notice = `<div class="local-note ok">Канал <b>${esc(checked.login)}</b>: найдено кампаний — ${checked.found}.</div>`;
+  } else if (checked) {
+    const at = checked.at ? new Date(checked.at).toLocaleTimeString('ru-RU') : '';
+    notice = `<div class="local-note warn">У канала <b>${esc(checked.login)}</b> сейчас нет локальных дропсов.${at ? ` Проверено в ${at}.` : ''}</div>`;
+  }
+  return `
+  <div class="channels-row">
+    ${chip || '<span class="channels-empty">Проверьте канал — покажем его локальные дропсы</span>'}
+    <form class="channel-form" data-action="local-check">
+      <input name="login" placeholder="логин канала, например streamdatabase" autocomplete="off" spellcheck="false" value="${esc(current)}" />
+      <button class="btn-ghost small" type="submit">Проверить</button>
+    </form>
+  </div>
+  ${notice}`;
+}
+
+/**
+ * Сетка игр. Карточки создаются один раз; при поиске мы только прячем
+ * лишние — иначе на каждую букву пересоздавались бы элементы и картинки,
+ * из-за чего сетка дёргалась.
+ */
+function gamesSection() {
+  const local = state.dropsTab === 'local';
+  const games = sortedGames();
+  const query = state.query.trim().toLowerCase();
+  const visible = games.filter((game) => matchesQuery(game, query)).length;
+  const cards = games
+    .map((game) => gameCard(game, { hidden: !matchesQuery(game, query) }))
+    .join('');
+
+  return `
+  ${local ? localChannelsBlock() : ''}
+  <div class="section-head">
+    <h2 class="section-title">${local ? 'Локальные дропсы каналов' : 'Игры с дропами'}</h2>
+    <span class="section-hint" id="games-hint">${visible} ${visible === 1 ? 'игра' : 'игр'} · нажмите на карточку, чтобы увидеть награды</span>
+    ${local ? '' : '<button class="btn-ghost small" style="margin-left:auto" data-action="select-farmable">Выбрать всё доступное</button>'}
+  </div>
+
+  <div class="games-grid" id="games-grid" ${visible ? '' : 'hidden'}>${cards}</div>
+  <div class="empty" id="games-empty" ${visible ? 'hidden' : ''}>
+    ${local
+      ? '<h3>Локальных дропсов нет</h3><p>Проверьте канал выше — приложение покажет кампании, которые Twitch выдаёт только на нём.</p>'
+      : '<h3>Ничего не найдено</h3><p>Измените запрос или обновите список — возможно, кампании ещё не начались.</p>' + (query ? '<button class="btn-ghost" data-action="clear-search">Сбросить фильтр</button>' : '')}
+  </div>`;
+}
+
+function catalogNotice(snapshot) {
+  const catalog = snapshot.catalog;
+  if (!catalog) return '';
+  if (catalog.stale) {
+    const at = catalog.at ? new Date(catalog.at).toLocaleString('ru-RU') : 'прошлого запуска';
+    return `<div class="catalog-note warn">Источники каталога недоступны — список взят из кэша (${esc(at)})</div>`;
+  }
+  if (!catalog.ok) {
+    return `<div class="catalog-note warn">Каталог недоступен${catalog.message ? `: ${esc(catalog.message)}` : ''}. Показаны только кампании из вашего аккаунта.</div>`;
+  }
+  return '';
+}
+
+function dropsView() {
+  const snapshot = state.snapshot;
+  const campaigns = snapshot.campaigns ?? [];
+  const globalCount = campaigns.filter((campaign) => !campaign.local).length;
+  const localCount = campaigns.filter((campaign) => campaign.local).length;
+
+  return `
+  <div class="stats-row">
+    <div class="stat"><div class="stat-label">Игры</div><div class="stat-value">${snapshot.stats.games}</div></div>
+    <div class="stat"><div class="stat-label">Дропы</div><div class="stat-value">${snapshot.stats.claimed}<small> / ${snapshot.stats.drops}</small></div></div>
+    <div class="stat"><div class="stat-label">Готовы к выдаче</div><div class="stat-value">${snapshot.stats.claimable}</div></div>
+    <div class="stat"><div class="stat-label">Накоплено</div><div class="stat-value">${formatMinutes(snapshot.stats.minutesEarned)}</div></div>
+    <div class="stat" style="margin-left:auto"><div class="stat-label">Обновлено</div><div class="stat-value" style="font-size:13px">${snapshot.lastRefresh ? new Date(snapshot.lastRefresh).toLocaleTimeString('ru-RU') : '—'}</div></div>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab ${state.dropsTab === 'global' ? 'active' : ''}" data-action="drops-tab" data-tab="global" role="tab">
+      Глобальные <span class="tab-count">${globalCount}</span>
+    </button>
+    <button class="tab ${state.dropsTab === 'local' ? 'active' : ''}" data-action="drops-tab" data-tab="local" role="tab">
+      Локальные <span class="tab-count">${localCount}</span>
+    </button>
+  </div>
+
+  ${catalogNotice(snapshot)}
+
+  <div id="games-section">${gamesSection()}</div>`;
+}
+
+function gameCard(game, { hidden = false } = {}) {
+  const art = boxArt(game);
+  const ratio = game.totalDrops ? game.claimedDrops / game.totalDrops : 0;
+  const ends = game.endsAt ? new Date(game.endsAt).getTime() - Date.now() : Infinity;
+  const soon = ends < 48 * 3600 * 1000;
+
+  return `
+  <div class="game-card ${game.selected ? 'selected' : ''}" data-action="open-game" data-slug="${esc(game.slug)}" data-name="${esc(game.name.toLowerCase())}" role="button" tabindex="0" ${hidden ? 'hidden' : ''}>
+    <div class="game-art">
+      ${art ? `<img src="${esc(art)}" alt="" loading="lazy" data-fallback />` : ''}
+      <div class="game-badges">
+        ${game.rewardOnly ? '<span class="badge">награда</span>' : game.canEarn ? '<span class="badge live"><i></i>drops</span>' : '<span class="badge">пауза</span>'}
+        ${game.channel ? `<span class="badge">канал: ${esc(game.channel)}</span>` : ''}
+        ${game.farming ? '<span class="badge farm">фарм</span>' : ''}
+      </div>
+    </div>
+    <div class="game-info">
+      <div class="game-title" title="${esc(game.name)}">${esc(game.name)}</div>
+      <div class="game-progress">
+        <span class="bar ${ratio >= 1 ? 'ok' : ''}"><i style="width:${percent(ratio)}"></i></span>
+        <span class="count">${game.claimedDrops}/${game.totalDrops}</span>
+      </div>
+      <div class="game-foot">
+        <span class="game-ends ${soon ? 'soon' : ''}">${soon ? 'осталось ' + esc(formatLeft(new Date(game.endsAt).toISOString())) : 'до ' + esc(formatDate(game.endsAt))}</span>
+        <div class="game-actions">
+          <button class="pin ${game.pinned ? 'on' : ''}" data-action="pin-game" data-slug="${esc(game.slug)}" title="${game.pinned ? 'Открепить' : 'Закрепить сверху'}">
+            ${game.pinned ? ICONS.starOn : ICONS.star}
+          </button>
+          <button class="pick ${game.selected ? 'on' : ''}" data-action="toggle-game" data-slug="${esc(game.slug)}" title="${game.selected ? 'Убрать из фарма' : 'Добавить в фарм'}">
+            ${game.selected ? ICONS.check : ICONS.plus}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ------------------------------------------------------------- detail sheet */
+
+function sheet() {
+  const snapshot = state.snapshot;
+  const game = snapshot.games.find((item) => item.slug === state.sheetGame);
+  if (!game) return '<div class="sheet-backdrop" data-action="close-sheet"></div><aside class="sheet" id="sheet"></aside>';
+
+  const campaigns = snapshot.campaigns.filter(
+    (campaign) => campaign.game.slug === game.slug && !campaign.expired,
+  );
+
+  const body = campaigns.length
+    ? campaigns.map(campaignBlock).join('')
+    : '<div class="empty"><h3>Кампаний нет</h3><p>Для этой игры сейчас не проводятся Drops.</p></div>';
+
+  const totalDrops = campaigns.reduce((sum, campaign) => sum + campaign.drops.length, 0);
+  const claimed = campaigns.reduce(
+    (sum, campaign) => sum + campaign.drops.filter((drop) => drop.isClaimed).length,
+    0,
+  );
+
+  return `
+  <div class="sheet-backdrop open" data-action="close-sheet"></div>
+  <aside class="sheet open" id="sheet">
+    <div class="sheet-hero">
+      <button class="icon-btn sheet-close" data-action="close-sheet">${ICONS.close}</button>
+      <div class="sheet-game">
+        ${boxArt(game) ? `<img class="sheet-art" src="${esc(boxArt(game))}" alt="" data-fallback />` : ''}
+        <div>
+          <h2 class="sheet-title">${esc(game.name)}</h2>
+          <div class="sheet-meta">${claimed}/${totalDrops} дропов · до ${esc(formatLeft(game.endsAt))}</div>
+        </div>
+      </div>
+      <div class="sheet-actions">
+        ${game.rewardOnly
+          ? `<button class="btn-primary ${game.farming ? 'danger' : ''}" style="flex:1" data-action="${game.farming ? 'stop' : 'farm-game'}" data-slug="${esc(game.slug)}">
+          ${game.farming ? ICONS.stop + ' Остановить' : ICONS.play + ' Смотреть'}
+        </button>
+        <button class="btn-ghost" data-action="open-rewards" title="Открыть страницу наград Twitch">Забрать на Twitch</button>`
+          : `<button class="btn-primary ${game.farming ? 'danger' : ''}" style="flex:1" data-action="${game.farming ? 'stop' : 'farm-game'}" data-slug="${esc(game.slug)}">
+          ${game.farming ? ICONS.stop + ' Остановить' : ICONS.play + ' Фармить'}
+        </button>
+        <button class="btn-ghost" data-action="toggle-game" data-slug="${esc(game.slug)}" title="${game.selected ? 'Убрать из списка фарма' : 'Добавить в список, не запуская'}">
+          ${game.selected ? ICONS.check + ' В списке' : ICONS.plus + ' В список'}
+        </button>`}
+      </div>
+    </div>
+    <div class="sheet-body">${body}</div>
+  </aside>`;
+}
+
+function campaignBlock(campaign) {
+  const watchDrops = campaign.drops.filter((drop) => Number(drop.requiredSubs ?? 0) <= 0);
+  const subDrops = campaign.drops.filter((drop) => Number(drop.requiredSubs ?? 0) > 0);
+  const groupHead = (text) =>
+    `<div style="margin:14px 2px 8px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;opacity:.65">${text}</div>`;
+  const drops = [
+    watchDrops.length ? groupHead('Смотреть Drops') + watchDrops.map(dropRow).join('') : '',
+    subDrops.length ? groupHead('Drops для подписки') + subDrops.map(dropRow).join('') : '',
+  ].join('');
+  const status = campaign.reward
+    ? '<span class="badge soon">награда Twitch</span>'
+    : campaign.upcoming
+      ? `<span class="badge soon">старт ${esc(formatDate(campaign.startsAt))}</span>`
+      : campaign.completed
+        ? '<span class="badge live">всё получено</span>'
+        : '';
+  const note = campaign.reward
+    ? '<p class="campaign-note">Награда за просмотр категории: часы идут в любой трансляции игры. Прогресс считает Twitch, а забирается награда на twitch.tv/drops/rewards.</p>'
+    : '';
+  return `
+  <section class="campaign">
+    <div class="campaign-head">
+      <div class="campaign-name">${esc(campaign.name)}</div>
+      ${status}
+      <div class="campaign-time">до ${esc(formatDate(campaign.endsAt))}</div>
+    </div>
+    ${note}
+    ${drops}
+  </section>`;
+}
+
+function subsWord(count) {
+  const rest = count % 100;
+  const last = count % 10;
+  if (rest >= 11 && rest <= 14) return 'подписок';
+  if (last === 1) return 'подписка';
+  if (last >= 2 && last <= 4) return 'подписки';
+  return 'подписок';
+}
+
+function dropRow(drop) {
+  const subs = Number(drop.requiredSubs ?? 0);
+  const label = drop.isClaimed
+    ? '<span class="drop-status done">получено</span>'
+    : drop.canClaim
+      ? '<span class="drop-status ready">готово</span>'
+      : subs > 0
+        ? `<span class="drop-status">${subs} ${subsWord(subs)}</span>`
+        : drop.reward
+        ? `<span class="drop-status">${drop.requiredMinutes} мин</span>`
+        : `<span class="drop-status">${drop.currentMinutes}/${drop.requiredMinutes} мин</span>`;
+
+  const art = drop.benefits?.find((benefit) => benefit.imageUrl)?.imageUrl ?? null;
+  const rewardName = drop.benefits?.[0]?.name ?? drop.name;
+
+  // у кампаний-наград прогресс считает Twitch, локально его не видно
+  const progress = subs > 0
+    ? '<span>награда за подписку на канал</span>'
+    : drop.reward
+    ? '<span>часы считает Twitch — забери награду на twitch.tv/drops/rewards</span>'
+    : `<span class="bar ${drop.isClaimed ? 'ok' : ''}" style="width:120px"><i style="width:${percent(drop.progress)}"></i></span>
+        <span>${Math.round(clamp01(drop.progress) * 100)}%</span>`;
+
+  return `
+  <div class="drop-row">
+    <div class="drop-thumb">
+      <span class="thumb-fallback">${ICONS.gift}</span>
+      ${art ? `<img src="${esc(art)}" alt="" loading="lazy" data-fallback />` : ''}
+    </div>
+    <div class="drop-main">
+      <div class="drop-name" title="${esc(rewardName)}">${esc(drop.name)}</div>
+      <div class="drop-sub">${progress}</div>
+    </div>
+    ${label}
+  </div>`;
+}
+
+/* ---------------------------------------------------------------- log view */
+
+function badgeRow(badge) {
+  const subs = Number(badge.requiredSubs ?? 0);
+  const minutes = Number(badge.requiredMinutes ?? 0);
+  const requirement =
+    subs > 0
+      ? `${subs} ${subsWord(subs)}`
+      : minutes > 0
+        ? `${minutes} мин просмотра`
+        : 'за покупку или подписку';
+  const art = badge.imageUrl;
+  const status = badge.claimed
+    ? '<span class="drop-status done">получен</span>'
+    : badge.paid
+      ? `<button class="paid-link" data-action="open-category" data-slug="${esc(badge.gameSlug)}" data-name="${esc(badge.game ?? badge.campaign ?? '')}" title="Открыть категорию на Twitch">
+          <span class="paid-label">платный</span><span class="paid-hover">открыть категорию</span>
+        </button>`
+      : `<button class="btn-ghost small" data-action="farm-game" data-slug="${esc(badge.gameSlug)}">Фармить</button>`;
+  return `
+  <div class="drop-row">
+    <div class="drop-thumb">
+      <span class="thumb-fallback">${ICONS.gift}</span>
+      ${art ? `<img src="${esc(art)}" alt="" loading="lazy" data-fallback />` : ''}
+    </div>
+    <div class="drop-main">
+      <div class="drop-name" title="${esc(badge.name)}">${esc(badge.name)}</div>
+      <div class="drop-sub"><span>${esc(badge.campaign ?? '')}${badge.game ? ' · ' + esc(badge.game) : ''} · ${requirement}</span></div>
+    </div>
+    ${status}
+  </div>`;
+}
+
+function badgesView() {
+  const badges = state.snapshot?.badges ?? [];
+  const free = badges.filter((badge) => !badge.paid);
+  const paid = badges.filter((badge) => badge.paid);
+  const group = (title, items) =>
+    items.length
+      ? `<section class="campaign">
+          <div class="campaign-head">
+            <div class="campaign-name">${title}</div>
+            <div class="campaign-time">${items.filter((badge) => badge.claimed).length}/${items.length}</div>
+          </div>
+          ${items.map(badgeRow).join('')}
+        </section>`
+      : '';
+  const claimedCount = badges.filter((badge) => badge.claimed).length;
+  const freeLeft = free.filter((badge) => !badge.claimed).length;
+  return `
+  <div class="stats-row">
+    <div class="stat"><div class="stat-label">Всего</div><div class="stat-value">${badges.length}</div></div>
+    <div class="stat"><div class="stat-label">Получено</div><div class="stat-value">${claimedCount}</div></div>
+    <div class="stat"><div class="stat-label">Бесплатных осталось</div><div class="stat-value">${freeLeft}</div></div>
+  </div>
+  ${
+    badges.length
+      ? group('Бесплатные', free) + group('Платные', paid)
+      : '<div class="empty"><h3>Бейджей пока нет</h3><p>Обновите каталог — кампании со значками появятся автоматически.</p></div>'
+  }`;
+}
+
+function logsView() {
+  const logs = [...(state.snapshot.logs ?? [])].reverse();
+  if (!logs.length) {
+    return '<div class="empty"><h3>Журнал пуст</h3><p>Здесь появятся события: загрузка кампаний, смена стримера, полученные награды.</p></div>';
+  }
+  const lines = logs
+    .map(
+      (entry) => `
+    <div class="log-line ${esc(entry.level)}">
+      <span class="log-time">${new Date(entry.at).toLocaleTimeString('ru-RU')}</span>
+      <span class="log-msg">${esc(entry.message)}</span>
+    </div>`,
+    )
+    .join('');
+  return `<div class="log-view">${lines}</div>`;
+}
+
+/* ----------------------------------------------------------- settings view */
+
+function settingsView() {
+  const settings = state.snapshot.settings ?? {};
+  return `
+  <div class="settings-grid">
+    <div class="card">
+      <h3>Автофарм</h3>
+      <p>Как приложение ведёт себя, когда награды уже капают.</p>
+
+      <div class="row">
+        <div>
+          <div class="row-label">Автоматически забирать награды</div>
+          <div class="row-hint">Как только дроп добит до 100%</div>
+        </div>
+        <button class="switch ${settings.autoClaim ? 'on' : ''}" data-action="toggle-setting" data-key="autoClaim"></button>
+      </div>
+
+      <div class="row">
+        <div>
+          <div class="row-label">Отправлять события просмотра (spade)</div>
+          <div class="row-hint">Через эти события Twitch засчитывает минуты просмотра. Выключайте только если Twitch начал ограничивать запросы — тогда прогресс дропов остановится</div>
+        </div>
+        <button class="switch ${settings.sendSpadeEvents ? 'on' : ''}" data-action="toggle-setting" data-key="sendSpadeEvents"></button>
+      </div>
+
+      <div class="row">
+        <div>
+          <div class="row-label">Сворачивать в трей при закрытии</div>
+          <div class="row-hint">Крестик прячет окно, фарм продолжается. Выключите, чтобы крестик завершал приложение</div>
+        </div>
+        <button class="switch ${settings.minimizeToTray === false ? '' : 'on'}" data-action="toggle-setting" data-key="minimizeToTray"></button>
+      </div>
+
+      <div class="row">
+        <div>
+          <div class="row-label">Обновлять склад кампаний</div>
+          <div class="row-hint">Раз в ${settings.refreshMinutes ?? 10} минут</div>
+        </div>
+        <input class="range" type="range" min="3" max="60" step="1" value="${settings.refreshMinutes ?? 10}" data-input="refresh" />
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Аккаунт</h3>
+      <p>Данные хранятся локально, в папке приложения.</p>
+      <div class="row">
+        <div>
+          <div class="row-label">${esc(state.snapshot.auth?.user?.login ?? 'не подключён')}</div>
+          <div class="row-hint">${esc(state.snapshot.auth?.tokenPreview ?? '')}</div>
+        </div>
+        <button class="btn-ghost small" data-action="logout">${ICONS.logout} Выйти</button>
+      </div>
+      <div class="row">
+        <div>
+          <div class="row-label">Папка с данными</div>
+          <div class="row-hint">Настройки и сессия Twitch</div>
+        </div>
+        <button class="btn-ghost small" data-action="open-data">${ICONS.folder} Открыть</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>О приложении</h3>
+      <p>DropForge — открытый аналог автофарма Twitch Drops. Видео не скачивается: приложение только поддерживает сессию просмотра и следит за прогрессом.</p>
+      <div class="row">
+        <div class="row-label muted">Версия</div>
+        <div class="mono muted" id="app-version">${esc(state.appVersion ?? '—')}</div>
+      </div>
+    </div>
+  </div>`;
+}
+
+/* ------------------------------------------------------------------ render */
+
+function render() {
+  const root = document.getElementById('root');
+  if (!root) return;
+
+  const searchWasFocused = document.activeElement?.id === 'search';
+  const caret = searchWasFocused ? document.activeElement.selectionStart : null;
+  const sheetScroll = document.querySelector('.sheet-body')?.scrollTop ?? 0;
+
+  if (!state.snapshot) {
+    root.innerHTML = `<div class="auth-screen"><div class="auth-left"><div class="auth-brand"><div class="brand-mark">${ICONS.logo}</div><span class="brand-name">DropForge</span></div><p class="auth-lead">Загрузка…</p></div></div>`;
+    return;
+  }
+
+  if (!state.snapshot.auth?.loggedIn) {
+    root.innerHTML = authScreen();
+    return;
+  }
+
+  const content =
+    state.view === 'drops'
+      ? dropsView()
+      : state.view === 'badges'
+        ? badgesView()
+        : state.view === 'logs'
+          ? logsView()
+          : settingsView();
+
+  root.innerHTML = `
+    <div class="app">
+      ${sidebar()}
+      <main class="main">
+        ${topbar()}
+        <div class="content" id="content">${content}</div>
+      </main>
+    </div>
+    ${state.sheetGame ? sheet() : ''}`;
+
+  const contentEl = document.getElementById('content');
+  if (contentEl) contentEl.scrollTop = state.scrollTop;
+
+  for (const img of document.querySelectorAll('img[data-fallback]')) {
+    img.addEventListener('error', () => img.remove(), { once: true });
+  }
+  if (searchWasFocused) {
+    const field = document.getElementById('search');
+    if (field) {
+      field.focus();
+      const position = caret ?? field.value.length;
+      field.setSelectionRange(position, position);
+    }
+  }
+  if (state.sheetGame) {
+    const sheetBody = document.querySelector('.sheet-body');
+    if (sheetBody) sheetBody.scrollTop = sheetScroll;
+  }
+}
+
+/* ----------------------------------------------------------------- actions */
+
+async function withBusy(key, fn) {
+  setBusy(key, true);
+  render();
+  try {
+    return await fn();
+  } catch (error) {
+    toast(error.message ?? String(error), 'error');
+  } finally {
+    setBusy(key, false);
+    render();
+  }
+}
+
+function applySnapshot(snapshot) {
+  // не даём экрану входа мигнуть, если вход уже был
+  if (
+    snapshot?.auth &&
+    snapshot.auth.loggedIn === false &&
+    state.snapshot?.auth?.loggedIn === true &&
+    !snapshot.auth.error
+  ) {
+    snapshot.auth = state.snapshot.auth;
+  }
+  // код устройства приходит в снимке — событий WebView может не быть
+  if (snapshot?.device?.userCode) {
+    state.device = snapshot.device;
+  } else if (snapshot?.auth?.loggedIn) {
+    state.device = null;
+  }
+  if (!snapshot) return;
+  state.snapshot = snapshot;
+  if (state.sheetGame && !snapshot.games.some((game) => game.slug === state.sheetGame)) {
+    state.sheetGame = null;
+  }
+  // Окно больше не ждёт сеть при старте, поэтому игра из --game может приехать
+  // позже первого рендера: открываем карточку, как только она появилась.
+  if (pendingSheetGame && snapshot.games.some((game) => game.slug === pendingSheetGame)) {
+    state.sheetGame = pendingSheetGame;
+    pendingSheetGame = null;
+  }
+  render();
+}
+
+const actions = {
+  nav(target) {
+    state.view = target.dataset.view;
+    state.scrollTop = 0;
+    render();
+  },
+  async refresh() {
+    state.query = '';
+    await withBusy('refresh', async () => {
+      const snapshot = await api.refresh();
+      applySnapshot(snapshot);
+    });
+  },
+  async start() {
+    await withBusy('farm', async () => {
+      applySnapshot(await api.start());
+    });
+  },
+  async stop() {
+    await withBusy('farm', async () => {
+      applySnapshot(await api.stop());
+    });
+  },
+  async 'pin-game'(target) {
+    await withBusy(`pin:${target.dataset.slug}`, async () => {
+      applySnapshot(await api.togglePin(target.dataset.slug));
+    });
+  },
+  async 'toggle-game'(target) {
+    await withBusy(`game:${target.dataset.slug}`, async () => {
+      applySnapshot(await api.toggleGame(target.dataset.slug));
+    });
+  },
+  async 'farm-game'(target) {
+    await withBusy('farm', async () => {
+      applySnapshot(await api.farmGame(target.dataset.slug));
+      toast('Фарм запущен', 'success');
+    });
+  },
+  'clear-search'() {
+    state.query = '';
+    render();
+  },
+  'drops-tab'(target) {
+    state.dropsTab = target.dataset.tab === 'local' ? 'local' : 'global';
+    state.query = '';
+    Promise.resolve(api.saveSettings?.({ dropsTab: state.dropsTab })).catch(() => {});
+    render();
+  },
+  async 'local-check'(form) {
+    if (typeof api.localCheckChannel !== 'function') {
+      toast('Локальные дропсы доступны в Tauri-сборке', 'error');
+      return;
+    }
+    const login = form.querySelector('input[name="login"]')?.value?.trim();
+    if (!login) return;
+    await withBusy('local', async () => {
+      const snapshot = await api.localCheckChannel(login);
+      if (snapshot?.error) {
+        toast(snapshot.error, 'error');
+        return;
+      }
+      applySnapshot(snapshot);
+      const check = snapshot.settings?.localCheck;
+      toast(check?.found ? `Найдено кампаний: ${check.found}` : 'Локальных дропсов сейчас нет', check?.found ? 'success' : 'error');
+    });
+  },
+  async 'local-clear'() {
+    if (typeof api.localClearChannel !== 'function') return;
+    await withBusy('local', async () => {
+      applySnapshot(await api.localClearChannel());
+    });
+  },
+  async 'select-farmable'() {
+    await withBusy('farm', async () => {
+      const slugs = state.snapshot.games.filter((game) => game.canEarn).map((game) => game.slug);
+      if (!slugs.length) {
+        toast('Нет игр с доступными дропами', 'error');
+        return;
+      }
+      applySnapshot(await api.selectOnly(slugs));
+    });
+  },
+  async 'clear-queue'() {
+    const count = state.snapshot.settings?.games?.length ?? 0;
+    if (!count) return;
+    if (count > 1 && !window.confirm(`Убрать все игры из очереди (${count})?`)) return;
+    await withBusy('queue', async () => {
+      applySnapshot(await api.clearQueue());
+      toast('Очередь очищена');
+    });
+  },
+  'open-game'(target) {
+    state.sheetGame = target.dataset.slug;
+    render();
+  },
+  'close-sheet'() {
+    state.sheetGame = null;
+    render();
+  },
+  async 'claim-all'() {
+    await withBusy('claim', async () => {
+      const { claimed, snapshot } = await api.claimAll();
+      applySnapshot(snapshot);
+      toast(claimed ? `Получено наград: ${claimed}` : 'Пока нечего забирать', claimed ? 'success' : 'info');
+    });
+  },
+  async 'login-browser'() {
+    state.error = null;
+    render();
+    await api.loginWithBrowser();
+    toast('Завершите вход в открывшемся окне Twitch');
+  },
+  async 'login-device'() {
+    state.error = null;
+    state.device = null;
+    render();
+    toast('Открываю браузер — подтвердите вход на Twitch');
+    try {
+      const snapshot = await api.loginWithDevice();
+      state.device = null;
+      applySnapshot(snapshot);
+      toast(`Вы вошли как ${snapshot.auth?.user?.login ?? 'аккаунт Twitch'}`, 'success');
+    } catch (error) {
+      const message = error?.message ?? String(error);
+      state.device = null;
+      if (/отмен/i.test(message)) {
+        render();
+        toast('Вход отменён');
+      } else {
+        state.error = message;
+        render();
+      }
+    }
+  },
+  async 'cancel-device'() {
+    state.device = null;
+    render();
+    await api.cancelDevice().catch(() => {});
+  },
+  async 'open-activation'() {
+    const uri = state.device?.uri ?? 'https://www.twitch.tv/activate';
+    await api.openExternal(uri);
+  },
+  /** «Кампания-награда» (например, GTA VI): забирается на странице наград Twitch. */
+  async 'open-category'(target) {
+    const slug = target.dataset.slug ?? '';
+    const name = target.dataset.name ?? '';
+    const url =
+      slug && !slug.startsWith('local:')
+        ? `https://www.twitch.tv/directory/category/${encodeURIComponent(slug)}`
+        : `https://www.twitch.tv/search?term=${encodeURIComponent(name)}`;
+    await api.openExternal(url);
+  },
+  async 'open-rewards'() {
+    const game = state.snapshot?.games?.find((item) => item.slug === state.sheetGame);
+    const campaign = state.snapshot?.campaigns?.find(
+      (item) => item.reward && (!game || item.game.slug === game.slug),
+    );
+    await api.openExternal(campaign?.webUrl ?? 'https://www.twitch.tv/drops/rewards');
+  },
+  async 'login-token'(target) {
+    const input = target.querySelector('#token');
+    const token = input?.value?.trim();
+    if (!token) {
+      toast('Вставьте OAuth-токен', 'error');
+      return;
+    }
+    state.error = null;
+    await withBusy('login', async () => {
+      try {
+        const snapshot = await api.loginWithToken(token);
+        applySnapshot(snapshot);
+        toast('Вход выполнен', 'success');
+      } catch (error) {
+        state.error = error.message;
+        render();
+      }
+    });
+  },
+  async logout() {
+    const snapshot = await api.logout();
+    applySnapshot(snapshot);
+    state.sheetGame = null;
+  },
+  async 'toggle-setting'(target) {
+    const key = target.dataset.key;
+    const value = !state.snapshot.settings?.[key];
+    applySnapshot(await api.saveSettings({ [key]: value }));
+  },
+  async 'open-data'() {
+    await api.openDataDir();
+  },
+};
+
+document.addEventListener('click', (event) => {
+  const target = event.target.closest('[data-action]');
+  if (!target) return;
+  const action = target.dataset.action;
+  if (target.tagName === 'FORM') return;
+  event.preventDefault();
+  event.stopPropagation();
+  const handler = actions[action];
+  if (!handler) {
+    console.warn(`[ui] нет обработчика для действия "${action}"`);
+    return;
+  }
+  Promise.resolve(handler(target)).catch((error) => toast(error.message, 'error'));
+});
+
+document.addEventListener('submit', (event) => {
+  const form = event.target.closest('form[data-action]');
+  if (!form) return;
+  event.preventDefault();
+  const handler = actions[form.dataset.action];
+  if (handler) Promise.resolve(handler(form)).catch((error) => toast(error.message, 'error'));
+});
+
+document.addEventListener('input', (event) => {
+  const target = event.target;
+  if (target.id === 'search') {
+    state.query = target.value;
+    const query = state.query.trim().toLowerCase();
+    const section = document.getElementById('games-section');
+    if (!section) {
+      render();
+      return;
+    }
+
+    // Только показываем/скрываем готовые карточки — без пересоздания DOM,
+    // иначе картинки перезагружаются и сетка дёргается.
+    let visible = 0;
+    for (const slot of section.querySelectorAll('.game-card')) {
+      const match = !query || (slot.dataset.name ?? '').includes(query);
+      slot.hidden = !match;
+      if (match) visible += 1;
+    }
+
+    const hint = document.getElementById('games-hint');
+    if (hint) {
+      hint.textContent = `${visible} ${visible === 1 ? 'игра' : 'игр'} · нажмите на карточку, чтобы увидеть награды`;
+    }
+    const grid = document.getElementById('games-grid');
+    const empty = document.getElementById('games-empty');
+    if (grid) grid.hidden = visible === 0;
+    if (empty) empty.hidden = visible > 0;
+    return;
+  }
+  if (target.dataset.input === 'refresh') {
+    api.saveSettings({ refreshMinutes: Number(target.value) }).catch(() => {});
+  }
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && state.sheetGame) {
+    state.sheetGame = null;
+    render();
+  }
+});
+
+document.addEventListener('scroll', (event) => {
+  if (event.target?.id === 'content') state.scrollTop = event.target.scrollTop;
+}, true);
+
+/* -------------------------------------------------------------------- boot */
+
+async function boot() {
+  const params = new URLSearchParams(location.search);
+
+  if (api?.version) {
+    api
+      .version()
+      .then((info) => {
+        state.appVersion = info?.app ?? null;
+        if (state.view === 'settings') render();
+      })
+      .catch(() => {});
+  }
+
+  const applyDeepLink = () => {
+    const view = params.get('view');
+    if (view && ['drops', 'logs', 'settings'].includes(view)) state.view = view;
+    const game = params.get('game');
+    if (!game) return;
+    if (state.snapshot?.games?.some((item) => item.slug === game)) state.sheetGame = game;
+    else pendingSheetGame = game;
+  };
+
+  if (!api) {
+    state.snapshot = demoSnapshot();
+    state.demo = true;
+    applyDeepLink();
+    render();
+    return;
+  }
+
+  if (params.get('demo') === '1') {
+    state.snapshot = demoSnapshot();
+    state.demo = true;
+    applyDeepLink();
+    render();
+    return;
+  }
+
+  try {
+    const initial = await api.init();
+    state.snapshot = initial;
+    state.demo = Boolean(initial.demo);
+    state.dropsTab = initial.settings?.dropsTab === 'local' ? 'local' : 'global';
+    applyDeepLink();
+    if (params.get('preview') === 'code') {
+      state.device = {
+        userCode: 'GTWMDPNH',
+        uri: 'https://www.twitch.tv/activate?device-code=GTWMDPNH',
+      };
+    }
+    render();
+
+    // Первый запуск: вход есть, а кэш кампаний пуст — подтягиваем список сами.
+    if (state.snapshot?.auth?.loggedIn && !state.snapshot?.stats?.campaigns) {
+      api
+        .refresh()
+        .then((snapshot) => {
+          if (snapshot) applySnapshot(snapshot);
+        })
+        .catch(() => {});
+    }
+  } catch (error) {
+    toast(`Ошибка запуска: ${error.message}`, 'error');
+    state.snapshot = demoSnapshot();
+    render();
+  }
+
+  for (const channel of api.events) {
+    api.on(channel, (payload) => {
+      switch (channel) {
+        case 'state':
+          applySnapshot(payload);
+          break;
+        case 'status':
+          if (state.snapshot) {
+            state.snapshot.status = payload;
+            const dot = document.querySelector('.farm-card');
+            if (dot) render();
+          }
+          break;
+        case 'log':
+          if (state.snapshot) {
+            state.snapshot.logs = [...(state.snapshot.logs ?? []), payload].slice(-200);
+            if (state.view === 'logs') render();
+          }
+          break;
+        case 'refresh':
+          setBusy('refresh', Boolean(payload.active));
+          if (state.view === 'drops') render();
+          break;
+        case 'auth':
+          if (state.snapshot) state.snapshot.auth = payload;
+          render();
+          break;
+        case 'auth-error':
+          state.error = payload;
+          render();
+          break;
+        case 'auth-cancelled':
+          toast('Вход отменён');
+          break;
+        case 'device-code':
+          state.device = payload;
+          render();
+          break;
+        case 'progress': {
+          if (!state.snapshot) break;
+          const campaign = state.snapshot.campaigns.find((item) => item.id === payload.campaignId);
+          const drop = campaign?.drops.find((item) => item.id === payload.dropId);
+          if (drop) {
+            drop.currentMinutes = payload.currentMinutes;
+            drop.progress = clamp01(payload.currentMinutes / (payload.requiredMinutes || 1));
+            if (state.view === 'drops') render();
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    });
+  }
+}
+
+boot();
+// timing probe
+

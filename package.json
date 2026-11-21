@@ -1,0 +1,42 @@
+{
+  "name": "dropforge",
+  "productName": "DropForge",
+  "version": "1.2.27",
+  "private": true,
+  "description": "Автофарм Twitch Drops: выберите игру — приложение само смотрит стримы и забирает награды",
+  "main": "src/main/main.cjs",
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/start.mjs",
+    "start:demo": "node scripts/start.mjs --demo",
+    "test": "node test/watcher-smoke.mjs",
+    "selftest": "node cli.js selftest",
+    "shot": "electron . --screenshot",
+    "shot:demo": "electron . --screenshot --demo",
+    "build": "node scripts/build.mjs",
+    "shortcut": "powershell -ExecutionPolicy Bypass -NoProfile -File scripts/make-shortcut.ps1",
+    "test:login": "node test/login-e2e.mjs",
+    "dev": "node scripts/dev.mjs",
+    "build:fast": "node scripts/build-asar.mjs",
+    "build:native": "node scripts/build-native.mjs",
+    "prebuild": "node scripts/build-native.mjs",
+    "svc": "cargo run --release --manifest-path rust/twitch-svc/Cargo.toml --",
+    "pubsub": "cargo run --release --manifest-path rust/pubsub-svc/Cargo.toml --",
+    "watch": "cargo run --release --manifest-path rust/watcher-svc/Cargo.toml --",
+    "tauri:dev": "cargo run --manifest-path rust/tauri-app/Cargo.toml",
+    "tauri:build": "cargo build --release --manifest-path rust/tauri-app/Cargo.toml",
+    "build:tauri": "node scripts/build-tauri.mjs",
+    "fast": "node scripts/fast.mjs",
+    "fast:svc": "node scripts/fast.mjs svc",
+    "fast:app": "node scripts/fast.mjs app",
+    "fast:smoke": "node scripts/fast.mjs smoke",
+    "dev:ui": "node scripts/dev-ui.mjs",
+    "check": "node scripts/check-flow.mjs",
+    "release:tauri": "node scripts/release-tauri.mjs"
+  },
+  "devDependencies": {
+    "@electron/asar": "^4.3.2",
+    "@electron/packager": "^20.3.0",
+    "electron": "^45.3.3"
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Projectssss\\_dropforge\\repo",
+  "unit": "src/core/gql.js",
+  "language": "ts",
+  "kind": "napi",
+  "crate_name": "dropforge-gql",
+  "exports": [
+    {
+      "name": "operationBody",
+      "file": "src/core/gql.js",
+      "line": 27,
+      "params": [
+        {
+          "name": "name",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "variables",
+          "ts_type": "unknown",
+          "optional": true,
+          "rest": false
+        },
+        {
+          "name": "ops",
+          "ts_type": "unknown",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "buildBatchBody",
+      "file": "src/core/gql.js",
+      "line": 38,
+      "params": [
+        {
+          "name": "operations",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "ops",
+          "ts_type": "unknown",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "interpretBatchPayload",
+      "file": "src/core/gql.js",
+      "line": 50,
+      "params": [
+        {
+          "name": "payload",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "body",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "operations",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "arg3",
+          "ts_type": "unknown",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "GqlError",
+      "file": "src/core/gql.js",
+      "line": 5,
+      "reason": "class: класс ошибок"
+    },
+    {
+      "name": "GqlClient",
+      "file": "src/core/gql.js",
+      "line": 97,
+      "reason": "class: сеть и состояние клиента"
+    }
+  ]
+}

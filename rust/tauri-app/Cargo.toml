@@ -1,0 +1,25 @@
+[package]
+name = "dropforge-tauri"
+version = "1.2.27"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+ureq = { version = "3", features = ["json"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_Memory", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[profile.release]
+# incremental rebuild: an edit to one function does not recompile the whole crate
+incremental = true
+
+[profile.dev]
+# no debug info: MSVC fails with D8050 while compiling ring, and dev builds are faster
+debug = 0

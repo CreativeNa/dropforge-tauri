@@ -1,0 +1,67 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Projectssss\\_dropforge\\repo",
+  "unit": "src/core/catalog.js",
+  "language": "ts",
+  "kind": "napi",
+  "crate_name": "dropforge-catalog",
+  "exports": [
+    {
+      "name": "parseDropPayload",
+      "file": "src/core/catalog.js",
+      "line": 190,
+      "params": [
+        {
+          "name": "payload",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "parseRewardPayload",
+      "file": "src/core/catalog.js",
+      "line": 206,
+      "params": [
+        {
+          "name": "payload",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "setCatalogCache",
+      "file": "src/core/catalog.js",
+      "line": 70,
+      "reason": "состояние кэша"
+    },
+    {
+      "name": "catalogStatus",
+      "file": "src/core/catalog.js",
+      "line": 75,
+      "reason": "состояние кэша"
+    },
+    {
+      "name": "fetchCatalog",
+      "file": "src/core/catalog.js",
+      "line": 260,
+      "reason": "сеть и файловый кэш"
+    }
+  ]
+}

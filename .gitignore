@@ -1,0 +1,11 @@
+node_modules/
+target/
+dist/
+dist-tauri/
+data/
+*.log
+out*.txt
+s[0-9].txt
+shot*.txt
+.DS_Store
+Thumbs.db

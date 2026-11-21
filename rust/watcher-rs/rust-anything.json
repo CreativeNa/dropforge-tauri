@@ -1,0 +1,85 @@
+{
+  "schema": "rust-anything/bridge@1",
+  "root": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Projectssss\\_dropforge\\repo",
+  "unit": "src/core/watcher.js",
+  "language": "ts",
+  "kind": "napi",
+  "crate_name": "dropforge-watcher",
+  "exports": [
+    {
+      "name": "urgency",
+      "file": "src/core/watcher.js",
+      "line": 15,
+      "params": [
+        {
+          "name": "campaign",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "pickCampaign",
+      "file": "src/core/watcher.js",
+      "line": 22,
+      "params": [
+        {
+          "name": "campaigns",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "arg1",
+          "ts_type": "unknown",
+          "optional": true,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    },
+    {
+      "name": "pickChannelFromStreams",
+      "file": "src/core/watcher.js",
+      "line": 34,
+      "params": [
+        {
+          "name": "streams",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        },
+        {
+          "name": "campaign",
+          "ts_type": "unknown",
+          "optional": false,
+          "rest": false
+        }
+      ],
+      "returns": "unknown",
+      "is_async": false,
+      "is_generator": false,
+      "type_params": [],
+      "uses_instanceof": false
+    }
+  ],
+  "classes": [],
+  "js_only": [
+    {
+      "name": "Watcher",
+      "file": "src/core/watcher.js",
+      "line": 56,
+      "reason": "class: цикл фарма и сеть"
+    }
+  ]
+}
