@@ -869,9 +869,12 @@ function badgeRow(badge) {
   const status = badge.claimed
     ? '<span class="drop-status done">получен</span>'
     : badge.paid
-      ? `<button class="paid-link" data-action="open-category" data-slug="${esc(badge.gameSlug)}" data-name="${esc(badge.game ?? badge.campaign ?? '')}" title="Открыть категорию на Twitch">
-          <span class="paid-label">платный</span><span class="paid-hover">открыть категорию</span>
-        </button>`
+      ? `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+          <button class="paid-link" data-action="open-category" data-slug="${esc(badge.gameSlug)}" data-name="${esc(badge.game ?? badge.campaign ?? '')}" title="Открыть категорию на Twitch">
+            <span class="paid-label">платный</span><span class="paid-hover">открыть категорию</span>
+          </button>
+          ${badge.webUrl ? `<button class="btn-ghost small" data-action="open-url" data-url="${esc(badge.webUrl)}">Условия</button>` : ''}
+        </div>`
       : `<button class="btn-ghost small" data-action="farm-game" data-slug="${esc(badge.gameSlug)}">Фармить</button>`;
   return `
   <div class="drop-row">
@@ -882,6 +885,7 @@ function badgeRow(badge) {
     <div class="drop-main">
       <div class="drop-name" title="${esc(badge.name)}">${esc(badge.name)}</div>
       <div class="drop-sub"><span>${esc(badge.campaign ?? '')}${badge.game ? ' · ' + esc(badge.game) : ''} · ${requirement}</span></div>
+      ${badge.note ? `<div class="drop-sub" style="opacity:.75"><span>${esc(badge.note)}</span></div>` : ''}
     </div>
     ${status}
   </div>`;

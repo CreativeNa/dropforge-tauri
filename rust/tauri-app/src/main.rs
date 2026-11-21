@@ -694,9 +694,6 @@ fn raw_from_reward(campaign: &Value) -> Value {
             .and_then(|req| req.get("minuteWatchedGoal"))
             .and_then(Value::as_f64)
             .unwrap_or(0.0);
-        if minutes == 0.0 {
-            continue;
-        }
         for reward in group.get("rewards").and_then(Value::as_array).cloned().unwrap_or_default() {
             let image = reward
                 .get("thumbnailImage")
@@ -2250,6 +2247,18 @@ fn snapshot_from_profile() -> Value {
         let campaign_id = text_of(campaign.get("id"));
         let game_slug = text_of(campaign.get("game").and_then(|game| game.get("slug")));
         let game_name = text_of(campaign.get("game").and_then(|game| game.get("name")));
+        let campaign_url = text_of(campaign.get("webUrl"));
+        let campaign_has_paid = campaign
+            .get("drops")
+            .and_then(Value::as_array)
+            .map(|drops| {
+                drops.iter().any(|drop| {
+                    let subs = drop.get("requiredSubs").and_then(Value::as_f64).unwrap_or(0.0);
+                    let minutes = drop.get("requiredMinutes").and_then(Value::as_f64).unwrap_or(0.0);
+                    subs > 0.0 || minutes <= 0.0
+                })
+            })
+            .unwrap_or(false);
         for drop in campaign.get("drops").and_then(Value::as_array).cloned().unwrap_or_default() {
             let minutes = drop.get("requiredMinutes").and_then(Value::as_f64).unwrap_or(0.0);
             let subs = drop.get("requiredSubs").and_then(Value::as_f64).unwrap_or(0.0);
@@ -2262,6 +2271,15 @@ fn snapshot_from_profile() -> Value {
                 let benefit_id = text_of(benefit.get("id"));
                 let claimed = claimed_ids.contains(&benefit_id);
                 let paid = subs > 0.0 || minutes <= 0.0;
+                let note = if subs > 0.0 {
+                    "нужна подписка: оформляется на Twitch"
+                } else if minutes <= 0.0 {
+                    "награда за подписку или покупку"
+                } else if campaign_has_paid {
+                    "финальная награда кампании: нужны все награды, включая платные"
+                } else {
+                    ""
+                };
                 badges.push(json!({
                     "id": benefit_id,
                     "name": benefit.get("name"),
@@ -2273,6 +2291,8 @@ fn snapshot_from_profile() -> Value {
                     "requiredMinutes": minutes,
                     "requiredSubs": subs,
                     "paid": paid,
+                    "note": note,
+                    "webUrl": campaign_url,
                     "claimed": claimed,
                     "endsAt": campaign.get("endsAt"),
                     "local": campaign.get("local").and_then(Value::as_bool).unwrap_or(false),
