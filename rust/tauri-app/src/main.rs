@@ -1414,6 +1414,7 @@ struct MinerState {
 static GAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static GAME_INDEX: Mutex<usize> = Mutex::new(0);
 static STOPPING: Mutex<bool> = Mutex::new(false);
+static WATCH_GEN: Mutex<u64> = Mutex::new(0);
 static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 static STATUS: Mutex<Value> = Mutex::new(Value::Null);
 static LOGS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
@@ -1828,6 +1829,12 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
         .stdout(std::process::Stdio::piped());
     hide_console(&mut command);
 
+    let is_local_campaign = slug.starts_with("local:");
+    let watch_generation = {
+        let mut generation = WATCH_GEN.lock().unwrap();
+        *generation += 1;
+        *generation
+    };
     match command.spawn() {
         Ok(mut child) => {
             let pid = child.id();
@@ -1869,9 +1876,21 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
                             }
                         }
                         if let Some(handle) = &handle {
+                            let category = event
+                                .get("progress")
+                                .and_then(|progress| progress.get("game"))
+                                .map(|game| text_of(Some(game)))
+                                .unwrap_or_default();
+                            let scope = if is_local_campaign { "локальная" } else { "глобальная" };
+                            let _ = handle.emit("progress", json!({ "channel": login_for_thread, "game": category.clone(), "scope": scope }));
+                            let category_label = if category.is_empty() {
+                                String::from("категория неизвестна")
+                            } else {
+                                category.clone()
+                            };
                             let message = match minutes {
-                                Some(value) => format!("Смотрю {login_for_thread} · {value:.0} мин"),
-                                None => format!("Смотрю {login_for_thread}"),
+                                Some(value) => format!("Смотрю {login_for_thread} · {category_label} · {scope} · {value:.0} мин"),
+                                None => format!("Смотрю {login_for_thread} · {category_label} · {scope}"),
                             };
                             let _ = handle.emit("log", json!({ "at": "", "level": "info", "message": message }));
                             let _ = handle.emit("progress", json!({
@@ -1882,7 +1901,9 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
                         }
                     }
                     let stopping = *STOPPING.lock().unwrap();
-                    if !stopping {
+                    let current_generation = *WATCH_GEN.lock().unwrap();
+                    // если вотчер уже заменили (другая игра/канал) — это не «стрим закончился»
+                    if !stopping && current_generation == watch_generation {
                         if let Some(handle) = &handle {
                             let _ = handle.emit("log", json!({ "at": "", "level": "info", "message": "Стрим закончился — беру следующую игру" }));
                         }
@@ -1892,7 +1913,8 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
                 });
             }
             *guard = Some(child);
-            let message = format!("Смотрю {login}");
+            let scope = if is_local_campaign { "локальная кампания" } else { "глобальная кампания" };
+            let message = format!("Смотрю {login} · {scope}");
             *STATUS.lock().unwrap() = json!({
                 "state": "watching",
                 "running": true,

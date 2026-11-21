@@ -193,6 +193,7 @@ fn watch_tick(
         json!({
             "dropID": session.get("dropID"),
             "currentMinutesWatched": session.get("currentMinutesWatched"),
+            "game": session.get("game").and_then(|game| game.get("displayName")),
         })
     });
 
