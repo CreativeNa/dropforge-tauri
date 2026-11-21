@@ -40,6 +40,8 @@ const state = {
   error: null,
   demo: false,
   loading: true,
+  update: null,
+  diagnostics: null,
   scrollTop: 0,
   appVersion: null,
 };
@@ -928,6 +930,28 @@ function logsView() {
 
 /* ----------------------------------------------------------- settings view */
 
+function updateHint() {
+  const info = state.update;
+  if (!info) return 'Проверяет релизы на GitHub и ставит новую версию сама';
+  if (info.error) return `Не удалось проверить: ${info.error}`;
+  if (!info.available) return `Установлена последняя версия (${info.current})`;
+  return `Доступна ${info.latest}, у вас ${info.current}`;
+}
+
+function updateBlock() {
+  const info = state.update;
+  if (!info?.available) return '';
+  const size = info.assetSize ? ` · ${(Number(info.assetSize) / 1048576).toFixed(1)} МБ` : '';
+  return `
+    <div class="row" style="align-items:flex-start">
+      <div>
+        <div class="row-label">Что нового в ${esc(info.latest ?? '')}</div>
+        <div class="row-hint" style="white-space:pre-wrap">${esc((info.notes ?? '').slice(0, 900))}</div>
+      </div>
+      <button class="btn-primary" data-action="update-install">Скачать и установить${esc(size)}</button>
+    </div>`;
+}
+
 function settingsView() {
   const settings = state.snapshot.settings ?? {};
   return `
@@ -986,6 +1010,25 @@ function settingsView() {
         </div>
         <button class="btn-ghost small" data-action="open-data">${ICONS.folder} Открыть</button>
       </div>
+    </div>
+
+    <div class="card">
+      <h3>Обслуживание</h3>
+      <div class="row">
+        <div>
+          <div class="row-label">Диагностика</div>
+          <div class="row-hint">Соберёт версии, состояние сервисов, доступность Twitch и журнал. Без логина, токена и путей с именем пользователя</div>
+        </div>
+        <button class="btn-ghost" data-action="diagnostics">Собрать отчёт</button>
+      </div>
+      <div class="row">
+        <div>
+          <div class="row-label">Обновления</div>
+          <div class="row-hint">${updateHint()}</div>
+        </div>
+        <button class="btn-ghost" data-action="update-check">Проверить обновления</button>
+      </div>
+      ${updateBlock()}
     </div>
 
     <div class="card">
@@ -1257,6 +1300,50 @@ const actions = {
         : `https://www.twitch.tv/search?term=${encodeURIComponent(name)}`;
     await api.openExternal(url);
   },
+  async diagnostics() {
+    state.busy.add('diagnostics');
+    render();
+    try {
+      const report = await api.diagnostics();
+      state.diagnostics = report;
+      toast('Отчёт сохранён: ' + (report?.path ?? 'data/profile/diagnostics/latest.txt'));
+    } catch (error) {
+      toast('Диагностика: ' + error.message, 'error');
+    } finally {
+      state.busy.delete('diagnostics');
+      render();
+    }
+  },
+
+  async 'update-check'() {
+    state.busy.add('update-check');
+    render();
+    try {
+      const info = await api.updateCheck();
+      state.update = info;
+      if (info?.error) toast('Обновления: ' + info.error, 'error');
+      else if (info?.available) toast('Доступна версия ' + info.latest);
+      else toast('Установлена последняя версия');
+    } catch (error) {
+      toast('Обновления: ' + error.message, 'error');
+    } finally {
+      state.busy.delete('update-check');
+      render();
+    }
+  },
+
+  async 'update-install'() {
+    const url = state.update?.assetUrl;
+    if (!url) { toast('Нет ссылки на архив обновления', 'error'); return; }
+    toast('Скачиваю обновление… окно закроется само');
+    try {
+      const result = await api.updateInstall(url);
+      if (!result?.started) toast('Обновление: ' + (result?.error ?? 'не удалось'), 'error');
+    } catch (error) {
+      toast('Обновление: ' + error.message, 'error');
+    }
+  },
+
   async 'open-rewards'() {
     const game = state.snapshot?.games?.find((item) => item.slug === state.sheetGame);
     const campaign = state.snapshot?.campaigns?.find(

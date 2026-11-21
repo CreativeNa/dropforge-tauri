@@ -43,6 +43,9 @@
     localClearChannel: () => call('local_clear_channel'),
     openExternal: (url) => call('shell_open', { url }),
     openDataDir: () => call('app_data_dir'),
+    diagnostics: () => call('diagnostics_report'),
+    updateCheck: () => call('update_check'),
+    updateInstall: (url) => call('update_install', { url }),
     quit: () => call('app_quit'),
     on: (channel, callback) => {
       // polling: слушатели хранятся здесь, а снимок опрашивается ниже

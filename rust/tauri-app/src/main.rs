@@ -161,6 +161,259 @@ const CATALOG_URL: &str = "https://raw.githubusercontent.com/SunkwiBOT/twitch-dr
 const REWARDS_URL: &str = "https://raw.githubusercontent.com/SunkwiBOT/twitch-drops-api/main/rewards.json";
 const REWARDS_PAGE: &str = "https://www.twitch.tv/drops/rewards";
 
+const UPDATE_REPO: &str = "CreativeNa/dropforge-tauri";
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Убираем из текста домашний каталог и имя пользователя.
+fn mask_text(text: &str) -> String {
+    let mut result = text.to_string();
+    if let Some(home) = std::env::var_os("USERPROFILE").and_then(|value| value.to_str().map(str::to_string)) {
+        result = result.replace(&home, "%USERPROFILE%");
+        if let Some(name) = std::path::Path::new(&home).file_name().and_then(|value| value.to_str()) {
+            result = result.replace(name, "%USER%");
+        }
+    }
+    result
+}
+
+#[cfg(windows)]
+fn reg_value(path: &str, name: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ};
+    let path: Vec<u16> = format!("{path}\0").encode_utf16().collect();
+    let name: Vec<u16> = format!("{name}\0").encode_utf16().collect();
+    let mut size: u32 = 0;
+    let probe = unsafe {
+        RegGetValueW(HKEY_LOCAL_MACHINE, path.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), &mut size)
+    };
+    if probe != 0 || size == 0 {
+        return None;
+    }
+    let mut buffer = vec![0u16; (size as usize / 2) + 1];
+    let read = unsafe {
+        RegGetValueW(HKEY_LOCAL_MACHINE, path.as_ptr(), name.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), buffer.as_mut_ptr() as *mut _, &mut size)
+    };
+    if read != 0 {
+        return None;
+    }
+    let length = buffer.iter().position(|value| *value == 0).unwrap_or(buffer.len());
+    Some(String::from_utf16_lossy(&buffer[..length]))
+}
+
+#[cfg(not(windows))]
+fn reg_value(_path: &str, _name: &str) -> Option<String> {
+    None
+}
+
+fn webview2_version() -> String {
+    reg_value("SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}", "pv")
+        .or_else(|| reg_value("SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}", "pv"))
+        .unwrap_or_else(|| "не найдена".to_string())
+}
+
+fn reachable(url: &str) -> String {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(8)))
+        .user_agent("DropForge-Diagnostics/1.0")
+        .build()
+        .new_agent();
+    match agent.head(url).call() {
+        Ok(response) => format!("OK {}", response.status().as_u16()),
+        Err(ureq::Error::StatusCode(code)) => format!("HTTP {code}"),
+        Err(error) => format!("ошибка: {error}"),
+    }
+}
+
+#[tauri::command]
+fn diagnostics_report(app: tauri::AppHandle) -> Value {
+    let profile = profile_dir();
+    let dir = profile.join("diagnostics");
+    let _ = std::fs::create_dir_all(&dir);
+    let mut lines: Vec<String> = Vec::new();
+    lines.push(format!("DropForge diagnostics"));
+    lines.push(format!("version: {APP_VERSION}"));
+    lines.push(format!("os: {} {}", std::env::consts::OS, std::env::consts::ARCH));
+    lines.push(format!("windows: {} {} (build {})",
+        reg_value("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "ProductName").unwrap_or_default(),
+        reg_value("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "DisplayVersion").unwrap_or_default(),
+        reg_value("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "CurrentBuild").unwrap_or_default()));
+    lines.push(format!("webview2: {}", webview2_version()));
+    lines.push(format!("exe: {}", mask_text(&std::env::current_exe().map(|path| path.display().to_string()).unwrap_or_default())));
+    lines.push(format!("data: {}", mask_text(&profile.display().to_string())));
+    let exe_dir = std::env::current_exe().ok().and_then(|path| path.parent().map(|dir| dir.to_path_buf())).unwrap_or_default();
+    for name in ["DropForge.exe", "dropforge-tauri.exe", "watcher-svc\\dropforge-watcher-svc.exe", "pubsub-svc\\dropforge-pubsub-svc.exe"] {
+        let path = exe_dir.join(name);
+        if let Ok(meta) = std::fs::metadata(&path) {
+            lines.push(format!("file: {name} — {} байт, изменён {}", meta.len(), chrono::DateTime::<chrono::Utc>::from(meta.modified().unwrap_or(std::time::SystemTime::now())).to_rfc3339()));
+        } else {
+            lines.push(format!("file: {name} — ОТСУТСТВУЕТ"));
+        }
+    }
+    let settings = load_settings();
+    lines.push(format!("settings.games: {}", text_of(settings.get("games"))));
+    lines.push(format!("settings.flags: autoClaim={} spade={} tray={}",
+        settings.get("autoClaim").and_then(Value::as_bool).unwrap_or(false),
+        settings.get("sendSpadeEvents").and_then(Value::as_bool).unwrap_or(false),
+        settings.get("minimizeToTray").and_then(Value::as_bool).unwrap_or(false)));
+    lines.push(format!("auth: {}", if load_token().is_some() { "токен есть" } else { "токена нет" }));
+    let status = STATUS.lock().unwrap().clone();
+    lines.push(format!("status: {status}"));
+    let child = CHILD.lock().unwrap().as_ref().and_then(|child| child.id().into());
+    lines.push(format!("watcher pid: {}", child.map(|pid| pid.to_string()).unwrap_or_else(|| "нет".into())));
+    let progress = read_json(progress_path()).unwrap_or(Value::Null);
+    lines.push(format!("progress.at: {}", text_of(progress.get("at"))));
+    lines.push(format!("progress.drops: {}", progress.get("drops").and_then(Value::as_object).map(|map| map.len()).unwrap_or(0)));
+    lines.push(format!("network gql.twitch.tv: {}", reachable("https://gql.twitch.tv")));
+    lines.push(format!("network api.github.com: {}", reachable("https://api.github.com")));
+    lines.push(format!("network drops.sunkwi.com: {}", reachable("https://drops.sunkwi.com/drops.json")));
+    lines.push(String::from("logs:"));
+    for entry in LOGS.lock().unwrap().iter().rev().take(120).rev() {
+        lines.push(format!("  {entry}"));
+    }
+    let report = mask_text(&lines.join("\n"));
+    let path = dir.join("latest.txt");
+    let _ = std::fs::write(&path, &report);
+    let _ = app.emit("log", json!({ "at": "", "level": "info", "message": "Отчёт диагностики сохранён" }));
+    json!({ "path": mask_text(&path.display().to_string()), "text": report })
+}
+
+fn version_parts(value: &str) -> Vec<u32> {
+    value.trim_start_matches('v').split('.').map(|part| part.parse::<u32>().unwrap_or(0)).collect()
+}
+
+fn version_greater(latest: &str, current: &str) -> bool {
+    let left = version_parts(latest);
+    let right = version_parts(current);
+    for index in 0..left.len().max(right.len()) {
+        let a = *left.get(index).unwrap_or(&0);
+        let b = *right.get(index).unwrap_or(&0);
+        if a != b {
+            return a > b;
+        }
+    }
+    false
+}
+
+#[tauri::command]
+fn update_check() -> Value {
+    let url = format!("https://api.github.com/repos/{UPDATE_REPO}/releases/latest");
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .user_agent("DropForge-Updater/1.0")
+        .build()
+        .new_agent();
+    let response = match agent.get(&url).header("Accept", "application/vnd.github+json").call() {
+        Ok(response) => response,
+        Err(ureq::Error::StatusCode(code)) => {
+            return json!({ "current": APP_VERSION, "available": false, "error": format!("GitHub ответил {code}") });
+        }
+        Err(error) => {
+            return json!({ "current": APP_VERSION, "available": false, "error": format!("нет связи: {error}") });
+        }
+    };
+    let release: Value = match response.into_body().read_json() {
+        Ok(value) => value,
+        Err(error) => return json!({ "current": APP_VERSION, "available": false, "error": format!("плохой ответ: {error}") }),
+    };
+    let tag = text_of(release.get("tag_name"));
+    let latest = tag.trim_start_matches('v').to_string();
+    let mut asset_url = String::new();
+    let mut asset_name = String::new();
+    let mut asset_size = 0u64;
+    for asset in release.get("assets").and_then(Value::as_array).cloned().unwrap_or_default() {
+        let name = text_of(asset.get("name"));
+        if name.ends_with(".zip") {
+            asset_url = text_of(asset.get("browser_download_url"));
+            asset_name = name;
+            asset_size = asset.get("size").and_then(Value::as_u64).unwrap_or(0);
+            break;
+        }
+    }
+    json!({
+        "current": APP_VERSION,
+        "latest": latest,
+        "available": !latest.is_empty() && version_greater(&latest, APP_VERSION),
+        "notes": release.get("body").cloned().unwrap_or(Value::Null),
+        "publishedAt": release.get("published_at").cloned().unwrap_or(Value::Null),
+        "assetUrl": asset_url,
+        "assetName": asset_name,
+        "assetSize": asset_size,
+        "url": release.get("html_url").cloned().unwrap_or(Value::Null),
+    })
+}
+
+fn updater_script() -> String {
+    [
+        "param([int]$AppPid, [string]$Zip, [string]$Dst, [string]$ExeName)",
+        "try { Wait-Process -Id $AppPid -Timeout 90 -ErrorAction SilentlyContinue } catch {}",
+        "Start-Sleep -Milliseconds 700",
+        "$tmp = Join-Path $env:TEMP (\"df-\" + [guid]::NewGuid().ToString(\"n\"))",
+        "Expand-Archive -LiteralPath $Zip -DestinationPath $tmp -Force",
+        "$src = Join-Path $tmp \"DropForge\"",
+        "if (-not (Test-Path $src)) { $src = $tmp }",
+        "Get-ChildItem $src -Force | ForEach-Object { Copy-Item $_.FullName -Destination $Dst -Recurse -Force }",
+        "if ($ExeName -ne \"DropForge.exe\") { Copy-Item (Join-Path $Dst \"DropForge.exe\") (Join-Path $Dst $ExeName) -Force }",
+        "Start-Process -FilePath (Join-Path $Dst $ExeName)",
+        "Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue",
+        "Remove-Item $Zip -Force -ErrorAction SilentlyContinue",
+    ].join("\n")
+}
+
+#[tauri::command]
+fn update_install(app: tauri::AppHandle, url: String) -> Value {
+    if !url.starts_with("https://github.com/") && !url.starts_with("https://objects.githubusercontent.com/") {
+        return json!({ "started": false, "error": "обновления берём только с GitHub" });
+    }
+    let exe = match std::env::current_exe() {
+        Ok(path) => path,
+        Err(error) => return json!({ "started": false, "error": error.to_string() }),
+    };
+    let exe_name = exe.file_name().and_then(|name| name.to_str()).unwrap_or("DropForge.exe").to_string();
+    let dir = exe.parent().map(|path| path.to_path_buf()).unwrap_or_default();
+    let zip_path = std::env::temp_dir().join("dropforge-update.zip");
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(180)))
+        .user_agent("DropForge-Updater/1.0")
+        .build()
+        .new_agent();
+    let mut response = match agent.get(&url).call() {
+        Ok(response) => response,
+        Err(error) => return json!({ "started": false, "error": format!("скачивание: {error}") }),
+    };
+    let bytes = match response.body_mut().with_config().limit(64 * 1024 * 1024).read_to_vec() {
+        Ok(bytes) => bytes,
+        Err(error) => return json!({ "started": false, "error": format!("чтение: {error}") }),
+    };
+    if let Err(error) = std::fs::write(&zip_path, &bytes) {
+        return json!({ "started": false, "error": error.to_string() });
+    }
+    let script = std::env::temp_dir().join("dropforge-update.ps1");
+    if let Err(error) = std::fs::write(&script, updater_script()) {
+        return json!({ "started": false, "error": error.to_string() });
+    }
+    let mut command = Command::new("powershell");
+    command
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
+        .arg(&script)
+        .arg("-AppPid")
+        .arg(std::process::id().to_string())
+        .arg("-Zip")
+        .arg(&zip_path)
+        .arg("-Dst")
+        .arg(&dir)
+        .arg("-ExeName")
+        .arg(&exe_name);
+    hide_console(&mut command);
+    if let Err(error) = command.spawn() {
+        return json!({ "started": false, "error": error.to_string() });
+    }
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        handle.exit(0);
+    });
+    json!({ "started": true, "script": mask_text(&script.display().to_string()) })
+}
+
 fn http_json(url: &str) -> Option<Value> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(20)))
@@ -2416,6 +2669,9 @@ fn main() {
             app_version,
             app_data_dir,
             shell_open,
+            diagnostics_report,
+            update_check,
+            update_install,
             app_quit,
             not_wired
         ])
