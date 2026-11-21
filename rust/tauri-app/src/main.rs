@@ -339,6 +339,14 @@ fn diagnostics_report(app: tauri::AppHandle) -> Value {
                 shown += 1;
             }
         }
+        if let Some(watch) = progress.get("watch") {
+            let game = text_of(watch.get("game"));
+            let minutes = watch.get("currentMinutes").and_then(Value::as_f64).unwrap_or(0.0);
+            if games.iter().any(|slug| slug == &game) {
+                lines.push(format!("watch progress: {game} — {minutes:.0} мин (без кампании в каталоге)"));
+                shown += 1;
+            }
+        }
         if shown == 0 {
             if games.iter().any(|slug| slug.starts_with("local:")) {
                 lines.push(String::from("drop progress: локальная кампания — Twitch не отдаёт прогресс по таким дропсам"));
@@ -2120,6 +2128,14 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
                         record_watch_minute(&slug_owned, 1.0);
                         bump_gta_day(&slug_owned, 1.0);
                         let _ = refresh_progress();
+                        let drop_id = event
+                            .get("progress")
+                            .and_then(|progress| progress.get("dropID"))
+                            .map(|value| text_of(Some(value)))
+                            .unwrap_or_default();
+                        if let Some(minutes) = minutes {
+                            record_watch_progress(&slug_owned, &drop_id, minutes);
+                        }
                         if let Some(handle) = &handle {
                             let _ = handle.emit("state", snapshot_from_profile());
                         }
@@ -2777,12 +2793,43 @@ fn snapshot_from_profile() -> Value {
         "logs": LOGS.lock().unwrap().clone(),
         "badges": badges,
         "collections": collections,
-        "badges": badges,
+        "watch": progress.get("watch").cloned().unwrap_or(Value::Null),
+        "legacy": legacy_state(),
         "device": DEVICE.lock().unwrap().clone(),
         "catalog": Value::Null,
         "demo": false,
         "platform": std::env::consts::OS,
     })
+}
+
+/// Минуты из тика вотчера: кампании может не быть в каталоге, но прогресс показать надо.
+fn record_watch_progress(slug: &str, drop_id: &str, minutes: f64) {
+    if slug.is_empty() || drop_id.is_empty() {
+        return;
+    }
+    let mut progress = read_json(progress_path()).unwrap_or_else(|| json!({}));
+    let Some(root) = progress.as_object_mut() else { return };
+    let at = chrono::Utc::now().to_rfc3339();
+    root.insert(
+        "watch".into(),
+        json!({ "game": slug, "dropId": drop_id, "currentMinutes": minutes, "at": at }),
+    );
+    let drops = root.entry("drops").or_insert_with(|| json!({}));
+    if let Some(map) = drops.as_object_mut() {
+        map.insert(
+            drop_id.to_string(),
+            json!({
+                "campaignId": Value::Null,
+                "currentMinutes": minutes,
+                "requiredMinutes": Value::Null,
+                "isClaimed": false,
+                "game": slug,
+            }),
+        );
+    }
+    if let Ok(text) = serde_json::to_string(&progress) {
+        let _ = std::fs::write(progress_path(), text);
+    }
 }
 
 fn settings_path() -> PathBuf {
@@ -3182,6 +3229,81 @@ fn app_data_dir() -> Value {
     json!(profile_dir().to_string_lossy().to_string())
 }
 
+/// Установленная копия (её кладёт NSIS).
+fn install_dir() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("LOCALAPPDATA")?;
+    let dir = std::path::PathBuf::from(base).join("DropForge");
+    if dir.is_dir() { Some(dir) } else { None }
+}
+
+/// Текущая копия не совпадает с установленной — значит запущена старая.
+fn legacy_state() -> Value {
+    let current = std::env::current_exe().ok();
+    let install = install_dir().and_then(|dir| {
+        let exe = dir.join("dropforge-tauri.exe");
+        if exe.is_file() { Some(exe) } else { None }
+    });
+    let current_text = current.as_ref().map(|path| path.display().to_string()).unwrap_or_default();
+    let install_text = install.as_ref().map(|path| path.display().to_string()).unwrap_or_default();
+    let stale = !install_text.is_empty() && current_text != install_text;
+    json!({
+        "currentExe": current_text,
+        "installExe": install_text,
+        "stale": stale,
+    })
+}
+
+/// Запустить установленную копию и закрыть текущую.
+#[tauri::command]
+fn legacy_launch() -> Value {
+    let Some(install) = install_dir().map(|dir| dir.join("dropforge-tauri.exe")) else {
+        return json!({ "error": "установленная копия не найдена" });
+    };
+    if !install.is_file() {
+        return json!({ "error": "установленная копия не найдена" });
+    }
+    let exe: Vec<u16> = format!("{}\0", install.display()).encode_utf16().collect();
+    let dir = install.parent().map(|path| path.display().to_string()).unwrap_or_default();
+    let workdir: Vec<u16> = format!("{dir}\0").encode_utf16().collect();
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let operation: Vec<u16> = "open\0".encode_utf16().collect();
+        unsafe {
+            ShellExecuteW(std::ptr::null_mut(), operation.as_ptr(), exe.as_ptr(), std::ptr::null(), workdir.as_ptr(), SW_SHOWNORMAL);
+        }
+        std::process::exit(0);
+    }
+    #[cfg(not(windows))]
+    {
+        json!({ "error": "только для Windows" })
+    }
+}
+
+/// Убрать старые файлы рядом с запущенной копией и вторую установку в Programs.
+fn legacy_cleanup() {
+    let current = std::env::current_exe().ok();
+    let install = install_dir();
+    if let (Some(current), Some(install)) = (current.as_ref(), install.as_ref()) {
+        let running_installed = current.starts_with(install);
+        if running_installed {
+            if let Some(base) = std::env::var_os("LOCALAPPDATA") {
+                let duplicate = std::path::PathBuf::from(base).join("Programs").join("DropForge");
+                if duplicate.is_dir() && !duplicate.starts_with(install) {
+                    let _ = std::fs::remove_dir_all(&duplicate);
+                }
+            }
+        }
+        if let Some(dir) = current.parent() {
+            let legacy = dir.join("DropForge.exe");
+            if legacy.is_file() && legacy != *current {
+                let _ = std::fs::remove_file(&legacy);
+            }
+        }
+    }
+}
+
 /// Кнопки, которым нужен движок: честно сообщаем, что ещё не подключено.
 /// Открывает ссылку в браузере без командной оболочки (никаких cmd/start).
 fn open_url(url: &str) -> bool {
@@ -3321,6 +3443,7 @@ fn main() {
     tauri::Builder::default()
         .manage(MinerState { child: Mutex::new(None), pubsub: Mutex::new(None), status: Mutex::new(Value::Null) })
         .setup(|app| {
+            legacy_cleanup();
             // мусор от прошлых обновлений: скрипт и архив больше не нужны
             let temp = std::env::temp_dir();
             let _ = std::fs::remove_file(temp.join("dropforge-update.ps1"));
@@ -3426,6 +3549,7 @@ fn main() {
             shell_open,
             diagnostics_report,
             diagnostics_open,
+            legacy_launch,
             report_summary,
             report_issue,
             update_check,

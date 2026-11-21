@@ -423,7 +423,9 @@ function liveProgress() {
         ${collection ? '' : `<span class="live-percent">${percent}%</span>`}
       </div>
       <div class="live-row">
-        <span class="live-left">${collection ? (nextChainName ? `следующая цепочка: ${esc(nextChainName)}` : 'все цепочки получены') : (remaining > 0 ? `ещё ~${formatMinutes(remaining)}` : 'готово к получению')}</span>
+        <span class="live-left">${collection
+          ? (nextChainName ? `следующая цепочка: ${esc(nextChainName)}` : 'все цепочки получены')
+          : (remaining > 0 ? `ещё ~${formatMinutes(remaining)}` : 'готово к получению')}</span>
         <span class="live-left">${campaign.endsAt ? 'до ' + formatDate(campaign.endsAt) : ''}</span>
       </div>
     </div>`
@@ -1156,6 +1158,19 @@ function settingsView() {
 
 /* ------------------------------------------------------------------ render */
 
+function legacyBanner() {
+  const legacy = state.snapshot?.legacy;
+  if (!legacy?.stale) return '';
+  return `
+    <div class="legacy-banner">
+      <div>
+        <b>Запущена устаревшая копия приложения.</b>
+        <span>Установленная версия лежит в <code>${esc(legacy.installExe)}</code></span>
+      </div>
+      <button class="btn-primary small" data-action="legacy-launch">Запустить установленную</button>
+    </div>`;
+}
+
 function render() {
   const root = document.getElementById('root');
   if (!root) return;
@@ -1188,6 +1203,7 @@ function render() {
       ${sidebar()}
       <main class="main">
         ${topbar()}
+        ${legacyBanner()}
         <div class="content" id="content">${content}</div>
       </main>
     </div>
@@ -1335,6 +1351,11 @@ const actions = {
       applySnapshot(await api.localClearChannel());
     });
   },
+  async 'legacy-launch'() {
+    if (typeof api.legacyLaunch !== 'function') return;
+    await api.legacyLaunch();
+  },
+
   async 'select-farmable'() {
     await withBusy('farm', async () => {
       const slugs = state.snapshot.games.filter((game) => game.canEarn).map((game) => game.slug);

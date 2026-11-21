@@ -48,6 +48,7 @@
     reportSummary: () => call('report_summary'),
     reportIssue: (comment) => call('report_issue', { comment }),
     updateCheck: () => call('update_check'),
+  legacyLaunch: () => call('legacy_launch'),
     updateInstall: (url) => call('update_install', { url }),
     quit: () => call('app_quit'),
     on: (channel, callback) => {
