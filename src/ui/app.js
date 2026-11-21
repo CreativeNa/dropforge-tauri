@@ -788,9 +788,14 @@ function campaignBlock(campaign) {
       : campaign.completed
         ? '<span class="badge live">всё получено</span>'
         : '';
-  const note = campaign.reward
-    ? '<p class="campaign-note">Награда за просмотр категории: часы идут в любой трансляции игры. Прогресс считает Twitch, а забирается награда на twitch.tv/drops/rewards.</p>'
-    : '';
+  const notes = [];
+  if (campaign.reward) {
+    notes.push('<p class="campaign-note">Награда за просмотр категории: часы идут в любой трансляции игры. Прогресс считает Twitch, а забирается награда на twitch.tv/drops/rewards.</p>');
+  }
+  if (campaign.linkUrl) {
+    notes.push(`<p class="campaign-note">Нужна привязка аккаунта: без неё Twitch не засчитывает минуты. <button class="btn-ghost small" data-action="open-url" data-url="${esc(campaign.linkUrl)}">Привязать аккаунт</button></p>`);
+  }
+  const note = notes.join('');
   return `
   <section class="campaign">
     <div class="campaign-head">
@@ -1357,6 +1362,11 @@ const actions = {
     } catch (error) {
       toast('Отчёт: ' + error.message, 'error');
     }
+  },
+
+  async 'open-url'(target) {
+    const url = target?.dataset?.url;
+    if (url) await api.openExternal(url);
   },
 
   async 'diagnostics-open'() {
