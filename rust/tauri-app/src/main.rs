@@ -918,8 +918,19 @@ fn refresh_catalog() -> Result<Value, String> {
             }
             // кампания могла уже прийти из инвентаря — локальная версия точнее
             // (полный список дропов канала и обложка кампании)
+            // не затираем каталожную/наградную версию: у неё бывают свои дропы и бейджи,
+            // поэтому локальная копия живёт рядом с отдельным id
+            let local_id = format!("{id}:local");
             match campaigns.iter().position(|item| text_of(item.get("id")) == id) {
-                Some(position) => campaigns[position] = campaign,
+                Some(_) => {
+                    let mut local = campaign;
+                    if let Some(object) = local.as_object_mut() {
+                        object.insert("id".into(), json!(local_id));
+                    }
+                    if !campaigns.iter().any(|item| text_of(item.get("id")) == local_id) {
+                        campaigns.push(local);
+                    }
+                }
                 None => campaigns.push(campaign),
             }
         }
