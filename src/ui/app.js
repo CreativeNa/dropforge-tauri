@@ -462,9 +462,6 @@ function sidebar() {
       <button class="nav-item ${state.view === 'badges' ? 'active' : ''}" data-action="nav" data-view="badges">
         ${ICONS.gift} Бейджи ${badgesFree ? `<span class="nav-badge">${badgesFree}</span>` : ''}
       </button>
-      <button class="nav-item ${state.view === 'logs' ? 'active' : ''}" data-action="nav" data-view="logs">
-        ${ICONS.log} Журнал
-      </button>
       <button class="nav-item ${state.view === 'settings' ? 'active' : ''}" data-action="nav" data-view="settings">
         ${ICONS.gear} Настройки
       </button>
@@ -982,7 +979,9 @@ function badgeRow(badge) {
           </button>
           ${badge.webUrl ? `<button class="btn-ghost small" data-action="open-url" data-url="${esc(badge.webUrl)}">Условия</button>` : ''}
         </div>`
-      : `<button class="btn-ghost small" data-action="farm-game" data-slug="${esc(badge.gameSlug)}">Фармить</button>`;
+      : badge.evolution && !badge.evolutionReady
+        ? `<button class="btn-ghost small" disabled title="Сначала нужен ${esc(badge.evolutionRequires)}" style="opacity:.45;cursor:not-allowed">Фармить</button>`
+        : `<button class="btn-ghost small" data-action="farm-game" data-slug="${esc(badge.gameSlug)}">Фармить</button>`;
   return `
   <div class="drop-row">
     <div class="drop-thumb">
@@ -992,7 +991,7 @@ function badgeRow(badge) {
     <div class="drop-main">
       <div class="drop-name" title="${esc(badge.name)}">${esc(badge.name)}</div>
       <div class="drop-sub"><span>${esc(badge.campaign ?? '')}${badge.game ? ' · ' + esc(badge.game) : ''} · ${requirement}</span></div>
-      ${badge.note ? `<div class="drop-sub" style="opacity:.75"><span>${esc(badge.note)}</span></div>` : ''}
+      ${badge.note ? `<div class="drop-sub" style="opacity:.9${badge.evolution ? (badge.evolutionReady ? ';color:#7fd88f' : ';color:#e0a45c') : ''}"><span>${esc(badge.note)}</span></div>` : ''}
     </div>
     ${status}
   </div>`;
@@ -1138,7 +1137,13 @@ function settingsView() {
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn-ghost" data-action="diagnostics-open">Открыть отчёт</button>
           <button class="btn-ghost" data-action="diagnostics">Собрать отчёт</button>
+          <button class="btn-ghost" data-action="copy-logs">Скопировать журнал</button>
         </div>
+      </div>
+      <div class="row" style="display:block">
+        <div class="row-label">Последние события</div>
+        <div class="row-hint">Те же записи, что попадают в отчёт диагностики</div>
+        <div style="max-height:220px;overflow:auto;margin-top:8px">${logsView()}</div>
       </div>
       <div class="row" style="align-items:flex-start">
         <div style="flex:1">
@@ -1214,9 +1219,7 @@ function render() {
       ? dropsView()
       : state.view === 'badges'
         ? badgesView()
-        : state.view === 'logs'
-          ? logsView()
-          : settingsView();
+        : settingsView();
 
   root.innerHTML = `
     <div class="app">
@@ -1471,6 +1474,17 @@ const actions = {
       state.busy.delete('diagnostics');
       render();
     }
+  },
+
+  async 'copy-logs'() {
+    const logs = [...(state.snapshot?.logs ?? [])].reverse();
+    if (!logs.length) { toast('Журнал пуст', 'error'); return; }
+    if (typeof api.copyText !== 'function') { toast('Копирование недоступно', 'error'); return; }
+    const text = logs
+      .map((entry) => `${new Date(entry.at).toISOString()} [${entry.level}] ${entry.message}`)
+      .join('\n');
+    const result = await api.copyText(text);
+    toast(result?.ok ? 'Журнал скопирован' : 'Не удалось скопировать', result?.ok ? 'info' : 'error');
   },
 
   async 'copy-summary'() {

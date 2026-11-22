@@ -439,6 +439,22 @@ fn last_error_line() -> String {
     String::from("нет")
 }
 
+/// Требуемый бейдж для эволюции (Pokémon First Partners / Evolutions).
+fn evolution_prereq(name: &str) -> Option<&'static str> {
+    match name {
+        "Ivysaur" => Some("Bulbasaur"),
+        "Venusaur" => Some("Ivysaur"),
+        "Charmeleon" => Some("Charmander"),
+        "Charizard" => Some("Charmeleon"),
+        "Wartortle" => Some("Squirtle"),
+        "Blastoise" => Some("Wartortle"),
+        "Haunter" => Some("Gastly"),
+        "Gengar" => Some("Haunter"),
+        "Raichu" => Some("Pikachu"),
+        _ => None,
+    }
+}
+
 fn short_summary() -> String {
     let settings = load_settings();
     let games: Vec<String> = settings.get("games").and_then(Value::as_array).map(|items| items.iter().map(|item| text_of(Some(item))).collect()).unwrap_or_default();
@@ -1759,6 +1775,8 @@ struct MinerState {
     status: Mutex<Value>,
 }
 
+struct TrayHolder(Mutex<Option<tauri::tray::TrayIcon>>);
+
 static GAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static GAME_INDEX: Mutex<usize> = Mutex::new(0);
 static STOPPING: Mutex<bool> = Mutex::new(false);
@@ -2649,6 +2667,11 @@ fn snapshot_from_profile() -> Value {
         .and_then(Value::as_array)
         .map(|items| items.iter().map(|item| text_of(item.get("title"))).collect())
         .unwrap_or_default();
+    let earned_titles: std::collections::HashSet<String> = progress
+        .get("earnedRewards")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().map(|item| text_of(item.get("name"))).collect())
+        .unwrap_or_default();
     let mut badges: Vec<Value> = Vec::new();
     for campaign in &campaigns {
         let campaign_name = text_of(campaign.get("name"));
@@ -2681,6 +2704,10 @@ fn snapshot_from_profile() -> Value {
                 if badge_name.to_lowercase().contains("iguana") {
                     continue;
                 }
+                // этот бейдж сейчас не выдаётся — не показываем мёртвую кнопку «Фармить»
+                if badge_name.to_lowercase().contains("themed poke ball") {
+                    continue;
+                }
                 let claimed = claimed_ids.contains(&benefit_id) || owned_titles.contains(&badge_name);
                 let paid = subs > 0.0 || minutes <= 0.0;
                 let note = if subs > 0.0 {
@@ -2692,9 +2719,26 @@ fn snapshot_from_profile() -> Value {
                 } else {
                     ""
                 };
+                let prereq = evolution_prereq(&badge_name);
+                let evolution_ready = prereq
+                    .map(|required| {
+                        owned_titles.contains(required) || earned_titles.contains(required)
+                    })
+                    .unwrap_or(false);
+                let evolution_note = match prereq {
+                    Some(required) if evolution_ready => {
+                        format!("эволюция: {required} уже есть в профиле — можно получать")
+                    }
+                    Some(required) => format!("эволюция: нужен {required} — в профиле его нет"),
+                    None => String::new(),
+                };
+                let note = if evolution_note.is_empty() { note.to_string() } else { evolution_note };
                 badges.push(json!({
                     "id": benefit_id,
                     "name": benefit.get("name"),
+                    "evolution": prereq.is_some(),
+                    "evolutionRequires": prereq.unwrap_or_default(),
+                    "evolutionReady": evolution_ready,
                     "imageUrl": benefit.get("imageUrl"),
                     "campaignId": campaign_id,
                     "campaign": campaign_name,
@@ -3559,6 +3603,11 @@ fn shell_open(url: String) -> Value {
 }
 
 #[tauri::command]
+fn clipboard_copy_text(text: String) -> Value {
+    json!({ "ok": clipboard_copy(&text) })
+}
+
+#[tauri::command]
 fn app_quit(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -3712,7 +3761,7 @@ fn main() {
                 .cloned()
                 .ok_or_else(|| tauri::Error::AssetNotFound("window icon".into()))?;
 
-            let _tray = TrayIconBuilder::new()
+            let tray = TrayIconBuilder::new()
                 .icon(icon)
                 .tooltip("DropForge — автофарм Twitch Drops")
                 .menu(&menu)
@@ -3727,6 +3776,7 @@ fn main() {
                     _ => {}
                 })
                 .build(app)?;
+            app.manage(TrayHolder(Mutex::new(Some(tray))));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -3769,12 +3819,17 @@ fn main() {
             update_check,
             update_install,
             app_quit,
+            clipboard_copy_text,
             not_wired
         ])
         .build(tauri::generate_context!())
         .expect("не удалось собрать окно DropForge")
         .run(|handle, event| {
             if let tauri::RunEvent::Exit = event {
+                // убираем иконку из трея до выхода, иначе Windows показывает её до наведения
+                if let Some(holder) = handle.try_state::<TrayHolder>() {
+                    let _ = holder.0.lock().unwrap().take();
+                }
                 let miner = CHILD.lock().unwrap().take();
                 let pubsub = handle
                     .try_state::<MinerState>()

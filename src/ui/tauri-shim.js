@@ -46,6 +46,7 @@
     diagnosticsOpen: () => call('diagnostics_open'),
     reportSummary: () => call('report_summary'),
     reportIssue: (comment) => call('report_issue', { comment }),
+  copyText: (text) => call('clipboard_copy_text', { text }),
     updateCheck: () => call('update_check'),
   legacyLaunch: () => call('legacy_launch'),
     updateInstall: (url, digest) => call('update_install', { url, digest }),
