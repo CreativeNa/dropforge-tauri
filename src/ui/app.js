@@ -710,6 +710,8 @@ function dropsView() {
   ${local ? localSection() : `<div id="games-section">${gamesSection()}</div>`}`;
 }
 
+const CARD_CACHE = new Map();
+
 function gameCard(game, { hidden = false } = {}) {
   const art = boxArt(game);
   const collection =
@@ -721,7 +723,23 @@ function gameCard(game, { hidden = false } = {}) {
   const ends = game.endsAt ? new Date(game.endsAt).getTime() - Date.now() : Infinity;
   const soon = ends < 48 * 3600 * 1000;
 
-  return `
+  const signature = JSON.stringify([
+    hidden,
+    game.slug,
+    game.name,
+    game.totalDrops,
+    game.claimedDrops,
+    Boolean(game.canEarn),
+    Boolean(game.selected),
+    Boolean(game.pinned),
+    game.endsAt ?? null,
+    game.boxArtUrl ?? null,
+  ]);
+  const cached = CARD_CACHE.get(game.slug);
+  if (cached && cached.signature === signature) {
+    return cached.html;
+  }
+  const html = `
   <div class="game-card ${game.selected ? 'selected' : ''}" data-action="open-game" data-slug="${esc(game.slug)}" data-name="${esc(game.name.toLowerCase())}" role="button" tabindex="0" ${hidden ? 'hidden' : ''}>
     <div class="game-art">
       ${art ? `<img src="${esc(art)}" alt="" loading="lazy" data-fallback />` : ''}
@@ -750,6 +768,8 @@ function gameCard(game, { hidden = false } = {}) {
       </div>
     </div>
   </div>`;
+  CARD_CACHE.set(game.slug, { signature, html });
+  return html;
 }
 
 /* ------------------------------------------------------------- detail sheet */
@@ -1549,10 +1569,10 @@ const actions = {
 
   async 'update-install'() {
     const url = state.update?.assetUrl;
-    if (!url) { toast('Нет ссылки на архив обновления', 'error'); return; }
+    if (!url) { toast('В релизе нет контрольной суммы — автообновление отключено, скачайте установщик вручную', 'error'); return; }
     toast('Скачиваю обновление… окно закроется само');
     try {
-      const result = await api.updateInstall(url);
+      const result = await api.updateInstall(url, state.update?.assetDigest);
       if (!result?.started) toast('Обновление: ' + (result?.error ?? 'не удалось'), 'error');
     } catch (error) {
       toast('Обновление: ' + error.message, 'error');

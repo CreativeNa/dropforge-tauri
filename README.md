@@ -79,4 +79,4 @@ docs/               заметки по идеям и исследованиям
 
 ## Legacy
 
-В репозитории остаётся старая Electron-версия (`src/main`, `src/core`, `scripts/build.mjs`) — она больше не поставляется, актуальное приложение собирается из `rust/tauri-app`.
+Старая Electron-версия удалена из репозитория: актуальное приложение — только `rust/tauri-app` (Tauri 2), сервисы — `rust/watcher-svc` и `rust/pubsub-svc`.

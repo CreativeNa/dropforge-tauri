@@ -1,8 +1,7 @@
 /**
- * Мост для Tauri: повторяет контракт preload-моста Electron.
+ * Мост между интерфейсом и Tauri-командами.
  *
- * Подключается только когда страница открыта в Tauri (есть window.__TAURI__),
- * поэтому тот же index.html продолжает работать в Electron.
+ * Подключается только когда страница открыта в Tauri (есть window.__TAURI__).
  */
 (() => {
   const tauri = window.__TAURI__;
@@ -49,7 +48,7 @@
     reportIssue: (comment) => call('report_issue', { comment }),
     updateCheck: () => call('update_check'),
   legacyLaunch: () => call('legacy_launch'),
-    updateInstall: (url) => call('update_install', { url }),
+    updateInstall: (url, digest) => call('update_install', { url, digest }),
     quit: () => call('app_quit'),
     on: (channel, callback) => {
       // polling: слушатели хранятся здесь, а снимок опрашивается ниже
@@ -74,18 +73,31 @@
       'pubsub',
     ],
   };
-  // раз в 5 секунд забираем снимок и рассылаем его слушателям
-  let lastSnapshot = "";
-  setInterval(async () => {
+  // лёгкий опрос: сначала отпечаток состояния, сам снимок — только если он изменился
+  let lastStamp = "";
+  let timer = null;
+  const pull = async () => {
     try {
-      const snapshot = await invoke("app_snapshot");
-      const key = JSON.stringify(snapshot);
-      if (key !== lastSnapshot) {
-        lastSnapshot = key;
+      const info = await invoke("app_snapshot_stamp");
+      const stamp = info?.stamp ?? "";
+      if (stamp && stamp !== lastStamp) {
+        lastStamp = stamp;
+        const snapshot = await invoke("app_snapshot");
         emit("state", snapshot);
       }
     } catch {
       /* приложение закрывается */
     }
-  }, 5000);
+  };
+  const schedule = () => {
+    const delay = document.hidden ? 30000 : 5000;
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(async () => {
+      await pull();
+      schedule();
+    }, delay);
+  };
+  document.addEventListener("visibilitychange", schedule);
+  schedule();
+
 })();

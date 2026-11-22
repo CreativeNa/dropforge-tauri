@@ -387,18 +387,46 @@ fn version_greater(latest: &str, current: &str) -> bool {
 }
 
 fn clipboard_copy(text: &str) -> bool {
-    let path = std::env::temp_dir().join("dropforge-clip.txt");
-    if std::fs::write(&path, text).is_err() {
-        return false;
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::HANDLE;
+        use windows_sys::Win32::System::DataExchange::{
+            CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+        };
+        use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
+        use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+        let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let bytes = wide.len() * std::mem::size_of::<u16>();
+        unsafe {
+            if OpenClipboard(std::ptr::null_mut()) == 0 {
+                return false;
+            }
+            EmptyClipboard();
+            let handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
+            if handle.is_null() {
+                CloseClipboard();
+                return false;
+            }
+            let pointer = GlobalLock(handle) as *mut u16;
+            if pointer.is_null() {
+                CloseClipboard();
+                return false;
+            }
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), pointer, wide.len());
+            GlobalUnlock(handle);
+            if SetClipboardData(CF_UNICODETEXT as u32, handle as HANDLE).is_null() {
+                CloseClipboard();
+                return false;
+            }
+            CloseClipboard();
+        }
+        true
     }
-    let script = format!(
-        "Set-Clipboard -Value (Get-Content -Raw -Encoding UTF8 -LiteralPath '{}')",
-        path.display()
-    );
-    let mut command = Command::new("powershell");
-    command.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]);
-    hide_console(&mut command);
-    command.spawn().is_ok()
+    #[cfg(not(windows))]
+    {
+        let _ = text;
+        false
+    }
 }
 
 fn last_error_line() -> String {
@@ -459,7 +487,7 @@ fn report_issue(app: tauri::AppHandle, comment: String) -> Value {
     }
     let copied = clipboard_copy(&summary);
     let mut explore = Command::new("explorer");
-    explore.arg(format!("/select,{}", path.display()));
+    explore.arg(format!("/select,\"{}\"", path.display()));
     hide_console(&mut explore);
     let _ = explore.spawn();
     json!({ "ok": true, "path": mask_text(&path.display().to_string()), "summary": summary, "copied": copied })
@@ -472,17 +500,12 @@ fn diagnostics_open() -> Value {
         return json!({ "ok": false, "error": "отчёт ещё не собран" });
     }
     let mut explore = Command::new("explorer");
-    explore.arg(format!("/select,{}", path.display()));
+    explore.arg(format!("/select,\"{}\"", path.display()));
     hide_console(&mut explore);
     let _ = explore.spawn();
-    let script = format!(
-        "Set-Clipboard -Value (Get-Content -Raw -LiteralPath '{}')",
-        path.display()
-    );
-    let mut clipboard = Command::new("powershell");
-    clipboard.args(["-NoProfile", "-WindowStyle", "Hidden", "-Command", &script]);
-    hide_console(&mut clipboard);
-    let _ = clipboard.spawn();
+    if let Ok(content) = std::fs::read_to_string(&path) {
+        let _ = clipboard_copy(&content);
+    }
     json!({ "ok": true, "path": mask_text(&path.display().to_string()) })
 }
 
@@ -512,12 +535,15 @@ fn update_check() -> Value {
     let mut asset_url = String::new();
     let mut asset_name = String::new();
     let mut asset_size = 0u64;
+    let mut asset_digest = String::new();
     for asset in release.get("assets").and_then(Value::as_array).cloned().unwrap_or_default() {
         let name = text_of(asset.get("name"));
-        if name.ends_with(".zip") {
+        let digest = text_of(asset.get("digest"));
+        if name.starts_with("DropForge-") && name.ends_with("-win64.zip") && digest.starts_with("sha256:") {
             asset_url = text_of(asset.get("browser_download_url"));
             asset_name = name;
             asset_size = asset.get("size").and_then(Value::as_u64).unwrap_or(0);
+            asset_digest = digest;
             break;
         }
     }
@@ -530,35 +556,75 @@ fn update_check() -> Value {
         "assetUrl": asset_url,
         "assetName": asset_name,
         "assetSize": asset_size,
+        "assetDigest": asset_digest,
         "url": release.get("html_url").cloned().unwrap_or(Value::Null),
     })
 }
 
+fn powershell_path() -> std::path::PathBuf {
+    if let Some(root) = std::env::var_os("SystemRoot") {
+        let candidate = std::path::PathBuf::from(root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    std::path::PathBuf::from("powershell")
+}
+
 fn updater_script() -> String {
     [
-        "param([int]$AppPid, [string]$Zip, [string]$Dst, [string]$ExeName)",
-        "try { Wait-Process -Id $AppPid -Timeout 90 -ErrorAction SilentlyContinue } catch {}",
-        "Start-Sleep -Milliseconds 700",
-        "$tmp = Join-Path $env:TEMP (\"df-\" + [guid]::NewGuid().ToString(\"n\"))",
-        "Expand-Archive -LiteralPath $Zip -DestinationPath $tmp -Force",
-        "$src = Join-Path $tmp \"DropForge\"",
-        "if (-not (Test-Path $src)) { $src = $tmp }",
-        "Get-ChildItem $src -Force | ForEach-Object { Copy-Item $_.FullName -Destination $Dst -Recurse -Force }",
-        "if ($ExeName -ne \"DropForge.exe\") {",
-        "    Copy-Item (Join-Path $Dst \"DropForge.exe\") (Join-Path $Dst $ExeName) -Force",
-        "    Remove-Item (Join-Path $Dst \"DropForge.exe\") -Force -ErrorAction SilentlyContinue",
+        "param([int]$AppPid, [string]$Zip, [string]$Dst, [string]$ExeName, [string]$WorkDir)",
+        "$ErrorActionPreference = 'Stop'",
+        "try {",
+        "    try { Wait-Process -Id $AppPid -Timeout 90 -ErrorAction SilentlyContinue } catch {}",
+        "    Start-Sleep -Milliseconds 700",
+        "    $tmp = Join-Path $WorkDir 'extract'",
+        "    Expand-Archive -LiteralPath $Zip -DestinationPath $tmp -Force",
+        "    $src = Join-Path $tmp 'DropForge'",
+        "    if (-not (Test-Path -LiteralPath $src)) { $src = $tmp }",
+        "    Get-ChildItem $src -Force | ForEach-Object { Copy-Item $_.FullName -Destination $Dst -Recurse -Force }",
+        "    $legacy = Join-Path $Dst 'DropForge.exe'",
+        "    if ($ExeName -ne 'DropForge.exe' -and (Test-Path -LiteralPath $legacy)) {",
+        "        Copy-Item $legacy (Join-Path $Dst $ExeName) -Force",
+        "        Remove-Item $legacy -Force -ErrorAction SilentlyContinue",
+        "    }",
+        "} catch {",
+        "    try { Set-Content -LiteralPath (Join-Path $Dst 'update-error.txt') -Value $_.Exception.Message -Encoding UTF8 } catch {}",
+        "} finally {",
+        "    try { Start-Process -FilePath (Join-Path $Dst $ExeName) } catch {}",
+        "    Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue",
         "}",
-        "Remove-Item (Join-Path $env:TEMP \"dropforge-update.ps1\") -Force -ErrorAction SilentlyContinue",
-        "Start-Process -FilePath (Join-Path $Dst $ExeName)",
-        "Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue",
-        "Remove-Item $Zip -Force -ErrorAction SilentlyContinue",
     ].join("\n")
 }
 
+/// SHA-256 в hex: сверяем скачанный архив с digest из GitHub Release.
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(64);
+    for byte in digest {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
+}
+
 #[tauri::command]
-fn update_install(app: tauri::AppHandle, url: String) -> Value {
-    if !url.starts_with("https://github.com/") && !url.starts_with("https://objects.githubusercontent.com/") {
-        return json!({ "started": false, "error": "обновления берём только с GitHub" });
+fn update_install(app: tauri::AppHandle, url: String, digest: Option<String>) -> Value {
+    // только релизы этого репозитория: чужой zip не должен попасть в установку
+    let allowed = format!("https://github.com/{UPDATE_REPO}/releases/download/");
+    if !url.starts_with(&allowed) && !url.starts_with("https://objects.githubusercontent.com/") {
+        return json!({ "started": false, "error": "обновления берём только из релизов DropForge" });
+    }
+    let expected = digest.unwrap_or_default().trim().to_lowercase();
+    let expected = expected.strip_prefix("sha256:").unwrap_or(&expected).to_string();
+    if expected.len() != 64 || !expected.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return json!({ "started": false, "error": "у обновления нет контрольной суммы — установка отменена" });
     }
     let exe = match std::env::current_exe() {
         Ok(path) => path,
@@ -566,7 +632,16 @@ fn update_install(app: tauri::AppHandle, url: String) -> Value {
     };
     let exe_name = exe.file_name().and_then(|name| name.to_str()).unwrap_or("DropForge.exe").to_string();
     let dir = exe.parent().map(|path| path.to_path_buf()).unwrap_or_default();
-    let zip_path = std::env::temp_dir().join("dropforge-update.zip");
+    let work = std::env::temp_dir().join(format!(
+        "dropforge-update-{}-{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    ));
+    if let Err(error) = std::fs::create_dir_all(&work) {
+        return json!({ "started": false, "error": error.to_string() });
+    }
+    let zip_path = work.join("update.zip");
+    let script = work.join("update.ps1");
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(180)))
         .user_agent("DropForge-Updater/1.0")
@@ -580,14 +655,18 @@ fn update_install(app: tauri::AppHandle, url: String) -> Value {
         Ok(bytes) => bytes,
         Err(error) => return json!({ "started": false, "error": format!("чтение: {error}") }),
     };
+    let actual = sha256_hex(&bytes);
+    if actual != expected {
+        let _ = std::fs::remove_dir_all(&work);
+        return json!({ "started": false, "error": "контрольная сумма не совпала — обновление отменено" });
+    }
     if let Err(error) = std::fs::write(&zip_path, &bytes) {
         return json!({ "started": false, "error": error.to_string() });
     }
-    let script = std::env::temp_dir().join("dropforge-update.ps1");
     if let Err(error) = std::fs::write(&script, updater_script()) {
         return json!({ "started": false, "error": error.to_string() });
     }
-    let mut command = Command::new("powershell");
+    let mut command = Command::new(powershell_path());
     command
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
         .arg(&script)
@@ -598,9 +677,12 @@ fn update_install(app: tauri::AppHandle, url: String) -> Value {
         .arg("-Dst")
         .arg(&dir)
         .arg("-ExeName")
-        .arg(&exe_name);
+        .arg(&exe_name)
+        .arg("-WorkDir")
+        .arg(&work);
     hide_console(&mut command);
     if let Err(error) = command.spawn() {
+        let _ = std::fs::remove_dir_all(&work);
         return json!({ "started": false, "error": error.to_string() });
     }
     let handle = app.clone();
@@ -1039,13 +1121,26 @@ fn refresh_catalog() -> Result<Value, String> {
     let drops = http_json(CATALOG_URL).ok_or("каталог недоступен")?;
     let rewards = http_json(REWARDS_URL).unwrap_or(Value::Null);
 
-    let mut campaigns = Vec::new();
+    let mut campaigns: Vec<Value> = Vec::new();
     for group in drops.get("games").and_then(Value::as_array).cloned().unwrap_or_default() {
         for campaign in group.get("rewards").and_then(Value::as_array).cloned().unwrap_or_default() {
             if campaign.get("status").and_then(Value::as_str) == Some("EXPIRED") {
                 continue;
             }
-            campaigns.push(raw_from_catalog(&group, &campaign));
+            let raw = raw_from_catalog(&group, &campaign);
+            // в самом фиде бывают одинаковые кампании с разными id — оставляем одну
+            let raw_name = text_of(raw.get("name")).to_lowercase();
+            let raw_slug = text_of(raw.get("game").and_then(|game| game.get("slug")));
+            let raw_end = text_of(raw.get("endAt"));
+            let duplicate = campaigns.iter().any(|item| {
+                text_of(item.get("name")).to_lowercase() == raw_name
+                    && text_of(item.get("game").and_then(|game| game.get("slug"))) == raw_slug
+                    && text_of(item.get("endAt")) == raw_end
+            });
+            if duplicate {
+                continue;
+            }
+            campaigns.push(raw);
         }
     }
     for campaign in rewards.get("campaigns").and_then(Value::as_array).cloned().unwrap_or_default() {
@@ -1072,6 +1167,17 @@ fn refresh_catalog() -> Result<Value, String> {
             let mut raw = raw_from_catalog(&Value::Null, &campaign);
             let slug = raw.get("game").and_then(|game| game.get("slug")).map(|slug| text_of(Some(slug))).unwrap_or_default();
             if slug.is_empty() {
+                continue;
+            }
+            // та же кампания уже могла прийти из публичного каталога — не плодим копии
+            let raw_name = text_of(raw.get("name")).to_lowercase();
+            let raw_end = text_of(raw.get("endAt"));
+            let duplicate = campaigns.iter().any(|item| {
+                text_of(item.get("name")).to_lowercase() == raw_name
+                    && text_of(item.get("game").and_then(|game| game.get("slug"))) == slug
+                    && text_of(item.get("endAt")) == raw_end
+            });
+            if duplicate {
                 continue;
             }
             // у кампаний из инвентаря часто нет обложки и названия игры — берём у известной кампании
@@ -1396,7 +1502,7 @@ fn channel_id_by_login(login: &str) -> Option<String> {
         .new_agent();
     let url = format!(
         "https://api.twitch.tv/helix/users?login={}",
-        login.to_lowercase()
+        url_encode(&login.to_lowercase())
     );
     let response: Value = agent
         .get(&url)
@@ -1683,7 +1789,7 @@ fn pubsub_exe() -> Option<std::path::PathBuf> {
         return Some(found);
     }
     let dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|path| path.to_path_buf()))?;
-    find_service_exe(&dir, "dropforge-pubsub-svc.exe", 6)
+    find_service_exe(&dir.join("_up_"), "dropforge-pubsub-svc.exe", 6)
 }
 
 /// PubSub в отдельном процессе: события уходят в UI как есть.
@@ -1811,7 +1917,7 @@ fn watcher_exe() -> Option<std::path::PathBuf> {
         return Some(found);
     }
     let dir = std::env::current_exe().ok().and_then(|exe| exe.parent().map(|path| path.to_path_buf()))?;
-    find_service_exe(&dir, "dropforge-watcher-svc.exe", 6)
+    find_service_exe(&dir.join("_up_"), "dropforge-watcher-svc.exe", 6)
 }
 
 /// Ищем исполняемый файл сервиса где угодно рядом с приложением.
@@ -2101,8 +2207,8 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
     if let Some(mut child) = guard.take() {
         let _ = child.kill();
     }
-    let minutes = std::env::var("DROPFORGE_WATCH_MINUTES").unwrap_or_else(|_| "1440".to_string());
-    let interval = std::env::var("DROPFORGE_TICK_INTERVAL").unwrap_or_else(|_| "60".to_string());
+    let minutes = debug_env("DROPFORGE_WATCH_MINUTES").unwrap_or_else(|| "1440".to_string());
+    let interval = debug_env("DROPFORGE_TICK_INTERVAL").unwrap_or_else(|| "60".to_string());
     let mut command = Command::new(&exe);
     command
         .args([
@@ -2142,7 +2248,7 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
                 std::thread::spawn(move || {
                     use std::io::BufRead;
                     let reader = std::io::BufReader::new(stdout);
-                    let tick_limit = std::env::var("DROPFORGE_TICKS").ok().and_then(|value| value.parse::<usize>().ok());
+                    let tick_limit = debug_env("DROPFORGE_TICKS").and_then(|value| value.parse::<usize>().ok());
                     let mut ticks = 0usize;
                     for line in reader.lines().map_while(Result::ok) {
                         let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
@@ -2156,7 +2262,9 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
                         // прогресс: обновляем минуты и отдаём снимок в UI
                         record_watch_minute(&slug_owned, 1.0);
                         bump_gta_day(&slug_owned, 1.0);
-                        let _ = refresh_progress();
+                        if progress_refresh_due() {
+                            let _ = refresh_progress();
+                        }
                         let drop_id = event
                             .get("progress")
                             .and_then(|progress| progress.get("dropID"))
@@ -2296,7 +2404,7 @@ fn focus_existing_window() {
 fn single_instance() -> bool {
     use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
     use windows_sys::Win32::System::Threading::CreateMutexW;
-    let mut name: Vec<u16> = "Global\\DropForgeTauriSingleInstance".encode_utf16().collect();
+    let mut name: Vec<u16> = "Local\\DropForgeTauriSingleInstance".encode_utf16().collect();
     name.push(0);
     unsafe {
         let handle = CreateMutexW(std::ptr::null(), 0, name.as_ptr());
@@ -2845,13 +2953,28 @@ fn record_watch_progress(slug: &str, drop_id: &str, minutes: f64) {
     );
     let drops = root.entry("drops").or_insert_with(|| json!({}));
     if let Some(map) = drops.as_object_mut() {
+        // у дропа уже может быть настоящая кампания из инвентаря — её не теряем
+        let existing = map.get(drop_id).cloned();
+        let campaign_id = existing
+            .as_ref()
+            .and_then(|value| value.get("campaignId").cloned())
+            .unwrap_or(Value::Null);
+        let required = existing
+            .as_ref()
+            .and_then(|value| value.get("requiredMinutes").cloned())
+            .unwrap_or(Value::Null);
+        let claimed = existing
+            .as_ref()
+            .and_then(|value| value.get("isClaimed"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         map.insert(
             drop_id.to_string(),
             json!({
-                "campaignId": Value::Null,
+                "campaignId": campaign_id,
                 "currentMinutes": minutes,
-                "requiredMinutes": Value::Null,
-                "isClaimed": false,
+                "requiredMinutes": required,
+                "isClaimed": claimed,
                 "game": slug,
             }),
         );
@@ -3224,7 +3347,14 @@ fn auth_login_token(token: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-fn auth_logout() -> Value {
+fn auth_logout(app: tauri::AppHandle) -> Value {
+    stop_miner();
+    if let Some(state) = app.try_state::<MinerState>() {
+        if let Some(mut child) = state.pubsub.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+    }
+    *STATUS.lock().unwrap() = json!({ "state": "idle", "running": false, "message": "Вход выполнен выход", "channel": null, "game": null });
     let _ = std::fs::remove_file(auth_path());
     set_auth_state(Value::Null);
     snapshot_from_profile()
@@ -3232,15 +3362,47 @@ fn auth_logout() -> Value {
 
 #[tauri::command]
 fn inventory_refresh(app: tauri::AppHandle) -> Value {
-    let _ = app.emit("refresh", json!({ "active": true }));
-    let result = refresh_catalog();
-    let snapshot = snapshot_from_profile();
-    if let Err(error) = result {
-        eprintln!("refresh error: {error}");
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let _ = handle.emit("refresh", json!({ "active": true }));
+        if let Err(error) = refresh_catalog() {
+            eprintln!("refresh error: {error}");
+        }
+        let snapshot = snapshot_from_profile();
+        let _ = handle.emit("refresh", json!({ "active": false }));
+        let _ = handle.emit("state", snapshot);
+    });
+    snapshot_from_profile()
+}
+
+static LAST_PROGRESS_REFRESH: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+fn progress_refresh_due() -> bool {
+    let mut last = LAST_PROGRESS_REFRESH.lock().unwrap();
+    let due = last.map(|at| at.elapsed() >= std::time::Duration::from_secs(300)).unwrap_or(true);
+    if due {
+        *last = Some(std::time::Instant::now());
     }
-    let _ = app.emit("refresh", json!({ "active": false }));
-    let _ = app.emit("state", snapshot.clone());
-    snapshot
+    due
+}
+
+#[tauri::command]
+fn app_snapshot_stamp() -> Value {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for name in ["catalog-cache.json", "progress.json", "settings.json", "auth.json"] {
+        if let Ok(meta) = std::fs::metadata(profile_dir().join(name)) {
+            meta.len().hash(&mut hasher);
+            if let Ok(modified) = meta.modified() {
+                if let Ok(span) = modified.duration_since(std::time::UNIX_EPOCH) {
+                    span.as_nanos().hash(&mut hasher);
+                }
+            }
+        }
+    }
+    STATUS.lock().unwrap().to_string().hash(&mut hasher);
+    CHILD.lock().unwrap().as_ref().map(|child| child.id()).hash(&mut hasher);
+    json!({ "stamp": format!("{:x}", hasher.finish()) })
 }
 
 #[tauri::command]
@@ -3311,6 +3473,20 @@ fn legacy_launch() -> Value {
 }
 
 /// Убрать старые файлы рядом с запущенной копией и вторую установку в Programs.
+#[cfg(windows)]
+fn is_reparse_point(path: &std::path::Path) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => meta.file_attributes() & 0x400 != 0,
+        Err(_) => true,
+    }
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_path: &std::path::Path) -> bool {
+    false
+}
+
 fn legacy_cleanup() {
     let current = std::env::current_exe().ok();
     let install = install_dir();
@@ -3319,14 +3495,14 @@ fn legacy_cleanup() {
         if running_installed {
             if let Some(base) = std::env::var_os("LOCALAPPDATA") {
                 let duplicate = std::path::PathBuf::from(base).join("Programs").join("DropForge");
-                if duplicate.is_dir() && !duplicate.starts_with(install) {
+                if duplicate.is_dir() && !duplicate.starts_with(install) && !is_reparse_point(&duplicate) {
                     let _ = std::fs::remove_dir_all(&duplicate);
                 }
             }
         }
         if running_installed {
             let leftovers = install.join("_up_");
-            if leftovers.is_dir() {
+            if leftovers.is_dir() && !is_reparse_point(&leftovers) {
                 let _ = std::fs::remove_dir_all(&leftovers);
             }
         }
@@ -3342,7 +3518,7 @@ fn legacy_cleanup() {
 /// Кнопки, которым нужен движок: честно сообщаем, что ещё не подключено.
 /// Открывает ссылку в браузере без командной оболочки (никаких cmd/start).
 fn open_url(url: &str) -> bool {
-    if !url.starts_with("https://") && !url.starts_with("http://") {
+    if !url.starts_with("https://") {
         return false;
     }
     // управляющие символы и пробелы в URL не допускаем
@@ -3405,7 +3581,7 @@ fn main() {
         }
     }
 
-    if std::env::var("DROPFORGE_CMDS").is_ok() {
+    if cfg!(debug_assertions) && std::env::var("DROPFORGE_CMDS").is_ok() {
         println!("toggle: {:?}", games_toggle("escape-from-tarkov".into()).get("stats"));
         println!("toggle2: {:?}", games_toggle("albion-online".into()).get("stats"));
         println!("pin: {:?}", games_pin("albion-online".into()).get("stats"));
@@ -3415,7 +3591,8 @@ fn main() {
         return;
     }
 
-    if let Ok(login) = std::env::var("DROPFORGE_LOCAL_CHECK") {
+    if cfg!(debug_assertions) && std::env::var("DROPFORGE_LOCAL_CHECK").is_ok() {
+        let login = std::env::var("DROPFORGE_LOCAL_CHECK").unwrap_or_default();
         let snapshot = local_check_channel(login);
         let check = snapshot
             .get("settings")
@@ -3426,7 +3603,7 @@ fn main() {
         return;
     }
 
-    if std::env::var("DROPFORGE_DEVICE").is_ok() {
+    if cfg!(debug_assertions) && std::env::var("DROPFORGE_DEVICE").is_ok() {
         match device_start() {
             Ok(value) => println!("device: {}", value),
             Err(error) => println!("device error: {error}"),
@@ -3434,12 +3611,13 @@ fn main() {
         return;
     }
 
-    if std::env::var("DROPFORGE_CLAIM").is_ok() {
+    if cfg!(debug_assertions) && std::env::var("DROPFORGE_CLAIM").is_ok() {
         println!("claim: {}", claim_all());
         return;
     }
 
-    if let Ok(list) = std::env::var("DROPFORGE_FARM") {
+    if cfg!(debug_assertions) && std::env::var("DROPFORGE_FARM").is_ok() {
+        let list = std::env::var("DROPFORGE_FARM").unwrap_or_default();
         let games: Vec<String> = list.split(',').map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect();
         let slug = games.first().cloned().unwrap_or_default();
         *STOPPING.lock().unwrap() = false;
@@ -3452,7 +3630,7 @@ fn main() {
         return;
     }
 
-    if std::env::var("DROPFORGE_REFRESH").is_ok() {
+    if cfg!(debug_assertions) && std::env::var("DROPFORGE_REFRESH").is_ok() {
         match refresh_catalog() {
             Ok(cache) => {
                 let count = cache
@@ -3467,7 +3645,7 @@ fn main() {
         return;
     }
 
-    if std::env::var("DROPFORGE_DUMP").is_ok() {
+    if cfg!(debug_assertions) && std::env::var("DROPFORGE_DUMP").is_ok() {
         let snapshot = snapshot_from_profile();
         let target = portable_root().join("snapshot.json");
         let _ = std::fs::write(&target, serde_json::to_string_pretty(&snapshot).unwrap_or_default());
@@ -3569,6 +3747,7 @@ fn main() {
             auth_login_browser,
             app_init,
             app_snapshot,
+            app_snapshot_stamp,
             inventory_refresh,
             auth_login_device,
             auth_login_token,
