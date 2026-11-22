@@ -501,6 +501,7 @@ fn report_issue(app: tauri::AppHandle, comment: String) -> Value {
     if let Err(error) = std::fs::write(&path, &content) {
         return json!({ "ok": false, "error": error.to_string() });
     }
+    register_export(&path);
     let copied = clipboard_copy(&summary);
     let mut explore = Command::new("explorer");
     explore.arg(format!("/select,\"{}\"", path.display()));
@@ -1134,6 +1135,9 @@ fn refresh_progress() -> Result<Value, String> {
 }
 
 fn refresh_catalog() -> Result<Value, String> {
+    if !is_logged_in() {
+        return Err("нет активного входа".to_string());
+    }
     let drops = http_json(CATALOG_URL).ok_or("каталог недоступен")?;
     let rewards = http_json(REWARDS_URL).unwrap_or(Value::Null);
 
@@ -1465,10 +1469,46 @@ fn validate_token(token: &str) -> Option<(String, String, String)> {
     ))
 }
 
+fn fetch_avatar(token: &str, login: &str) -> Option<String> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(15)))
+        .user_agent("Mozilla/5.0 DropForge/1.1")
+        .build()
+        .new_agent();
+    let url = format!(
+        "https://api.twitch.tv/helix/users?login={}",
+        url_encode(&login.to_lowercase())
+    );
+    let response: Value = agent
+        .get(&url)
+        .header("Client-Id", &auth_client_id())
+        .header("Authorization", &format!("Bearer {token}"))
+        .call()
+        .ok()?
+        .into_body()
+        .read_json()
+        .ok()?;
+    response
+        .get("data")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|user| user.get("profile_image_url"))
+        .map(|value| text_of(Some(value)))
+        .filter(|value| !value.is_empty())
+}
+
+fn store_avatar(url: &str) {
+    let Some(mut payload) = read_json(auth_path()) else { return };
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("avatarUrl".into(), json!(url));
+        let _ = std::fs::write(auth_path(), serde_json::to_string_pretty(&payload).unwrap_or_default());
+    }
+}
+
 fn save_token(token: &str) -> Option<(String, String)> {
     let (login, user_id, client_id) = validate_token(token)?;
     let protected = dpapi(token.as_bytes(), true)?;
-    let payload = json!({
+    let mut payload = json!({
         "token": format!("enc:{}", base64_encode(&protected)),
         "login": login,
         "userId": user_id,
@@ -1477,9 +1517,21 @@ fn save_token(token: &str) -> Option<(String, String)> {
     });
     std::fs::create_dir_all(profile_dir()).ok();
     std::fs::write(auth_path(), serde_json::to_string_pretty(&payload).ok()?).ok()?;
+    let login_for_avatar = text_of(payload.get("login"));
+    if let Some(avatar) = fetch_avatar(token, &login_for_avatar) {
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("avatarUrl".into(), json!(avatar));
+        }
+        let _ = std::fs::write(auth_path(), serde_json::to_string_pretty(&payload).unwrap_or_default());
+    }
     // Кэш авторизации мог запомнить пустое состояние до входа — обновляем его.
     set_auth_state(payload.clone());
     Some((text_of(payload.get("login")), text_of(payload.get("userId"))))
+}
+
+fn is_logged_in() -> bool {
+    let auth = auth_state();
+    auth.get("token").is_some() || load_token().is_some()
 }
 
 fn load_token() -> Option<String> {
@@ -1916,44 +1968,53 @@ fn start_watchdog(app: tauri::AppHandle) {
 }
 
 fn start_background(app: tauri::AppHandle) {
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(600));
-        let refreshed = refresh_catalog();
-        let settings = read_json(profile_dir().join("settings.json")).unwrap_or(Value::Null);
-        let auto_claim = settings.get("autoClaim").and_then(Value::as_bool).unwrap_or(true);
-        if auto_claim && refreshed.is_ok() {
-            let result = claim_all();
-            let _ = app.emit("log", json!({
-                "at": "",
-                "level": "info",
-                "message": format!("Автоклейм: {}", result)
-            }));
-        }
-        // если ничего не фармится — берём бесплатный неполученный бейдж
-        let auto_badges = load_settings()
-            .get("autoBadges")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        let running = STATUS
-            .lock()
-            .unwrap()
-            .get("running")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        // жёсткая привязка: если в очереди есть игры, авто-бейджи не имеют права
-        // переключать фарм на другую категорию
-        let queue_empty = load_settings()
-            .get("games")
-            .and_then(Value::as_array)
-            .map(|items| items.is_empty())
-            .unwrap_or(true);
-        if auto_badges && !running && queue_empty {
-            if let Some((slug, name)) = first_badge_target() {
-                push_log("info", format!("Беру бесплатный бейдж: {name}"));
-                let _ = start_miner(Some(app.clone()), &slug);
+    std::thread::spawn(move || {
+        let mut last_refresh = std::time::Instant::now() - std::time::Duration::from_secs(3600);
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            let refresh_minutes = load_settings()
+                .get("refreshMinutes")
+                .and_then(Value::as_u64)
+                .unwrap_or(10)
+                .max(1);
+            if last_refresh.elapsed() < std::time::Duration::from_secs(refresh_minutes * 60) {
+                continue;
             }
+            last_refresh = std::time::Instant::now();
+            let refreshed = refresh_catalog();
+            let settings = read_json(profile_dir().join("settings.json")).unwrap_or(Value::Null);
+            let auto_claim = settings.get("autoClaim").and_then(Value::as_bool).unwrap_or(true);
+            if auto_claim && refreshed.is_ok() {
+                let result = claim_all();
+                let _ = app.emit("log", json!({
+                    "at": "",
+                    "level": "info",
+                    "message": format!("Автоклейм: {}", result)
+                }));
+            }
+            let auto_badges = load_settings()
+                .get("autoBadges")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
+            let running = STATUS
+                .lock()
+                .unwrap()
+                .get("running")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let queue_empty = load_settings()
+                .get("games")
+                .and_then(Value::as_array)
+                .map(|items| items.is_empty())
+                .unwrap_or(true);
+            if auto_badges && !running && queue_empty {
+                if let Some((slug, name)) = first_badge_target() {
+                    push_log("info", format!("Беру бесплатный бейдж: {name}"));
+                    let _ = start_miner(Some(app.clone()), &slug);
+                }
+            }
+            let _ = app.emit("state", snapshot_from_profile());
         }
-        let _ = app.emit("state", snapshot_from_profile());
     });
 }
 
@@ -3069,7 +3130,8 @@ fn snapshot_from_profile() -> Value {
                 json!({
                     "id": tauri_auth.get("userId").or_else(|| auth.get("userId")),
                     "login": login,
-                    "displayName": login
+                    "displayName": login,
+                    "avatarUrl": tauri_auth.get("avatarUrl").or_else(|| auth.get("avatarUrl")).cloned().unwrap_or(Value::Null)
                 })
             } else {
                 Value::Null
@@ -3257,15 +3319,25 @@ fn settings_games() -> Vec<String> {
 }
 
 #[tauri::command]
-fn settings_save(patch: Value) -> Value {
+fn settings_save(app: tauri::AppHandle, patch: Value) -> Value {
     let mut settings = load_settings();
+    let refresh_changed = patch.get("refreshMinutes").is_some();
     if let (Some(target), Some(source)) = (settings.as_object_mut(), patch.as_object()) {
         for (key, value) in source {
             target.insert(key.clone(), value.clone());
         }
     }
     match save_settings(&settings) {
-        Ok(()) => snapshot_from_profile(),
+        Ok(()) => {
+            if refresh_changed {
+                let handle = app.clone();
+                std::thread::spawn(move || {
+                    let _ = refresh_catalog();
+                    let _ = handle.emit("state", snapshot_from_profile());
+                });
+            }
+            snapshot_from_profile()
+        }
         Err(error) => json!({ "error": error }),
     }
 }
@@ -3538,17 +3610,84 @@ fn auth_login_token(token: String) -> Result<Value, String> {
     }
 }
 
+fn exports_path() -> PathBuf {
+    profile_dir().join("exports.json")
+}
+
+fn register_export(path: &std::path::Path) {
+    let mut list = read_json(exports_path())
+        .and_then(|value| value.as_array().cloned())
+        .unwrap_or_default();
+    list.push(json!(path.display().to_string()));
+    let _ = std::fs::write(exports_path(), serde_json::to_string(&Value::Array(list)).unwrap_or_default());
+}
+
+/// Удаляем отчёты, которые приложение сохраняло в «Загрузки».
+fn cleanup_exports() {
+    if let Some(items) = read_json(exports_path()).and_then(|value| value.as_array().cloned()) {
+        for item in items {
+            let path = std::path::PathBuf::from(text_of(Some(&item)));
+            if path.is_file() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    // отчёты старых версий, созданные без реестра
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        let downloads = std::path::PathBuf::from(home).join("Downloads");
+        if let Ok(entries) = std::fs::read_dir(&downloads) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("DropForge-report-") && name.ends_with(".txt") {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+}
+
+/// Полный сброс профиля: как после чистой установки.
+fn reset_profile() {
+    cleanup_exports();
+    let profile = profile_dir();
+    for name in [
+        "tauri-auth.json",
+        "auth.json",
+        "progress.json",
+        "catalog-cache.json",
+        "settings.json",
+        "farm-state.json",
+        "snapshot.json",
+        "exports.json",
+    ] {
+        let _ = std::fs::remove_file(profile.join(name));
+    }
+    let diagnostics = profile.join("diagnostics");
+    if diagnostics.is_dir() {
+        let _ = std::fs::remove_dir_all(&diagnostics);
+    }
+    let _ = std::fs::create_dir_all(&profile);
+}
+
 #[tauri::command]
 fn auth_logout(app: tauri::AppHandle) -> Value {
+    // останавливаем всё, что связано с фармом
     stop_miner();
     if let Some(state) = app.try_state::<MinerState>() {
         if let Some(mut child) = state.pubsub.lock().unwrap().take() {
             let _ = child.kill();
         }
     }
-    *STATUS.lock().unwrap() = json!({ "state": "idle", "running": false, "message": "Вход выполнен выход", "channel": null, "game": null });
-    let _ = std::fs::remove_file(auth_path());
+    *GAMES.lock().unwrap() = Vec::new();
+    *GAME_INDEX.lock().unwrap() = 0;
+    *STOPPING.lock().unwrap() = false;
+    *STATUS.lock().unwrap() = json!({ "state": "idle", "running": false, "message": "Готов к работе", "channel": null, "game": null });
+    LOGS.lock().unwrap().clear();
     set_auth_state(Value::Null);
+    // удаляем данные пользователя: токен, прогресс, кэш, настройки
+    reset_profile();
+    push_log("info", "Выход: данные профиля очищены".to_string());
+    let _ = app.emit("state", snapshot_from_profile());
     snapshot_from_profile()
 }
 
@@ -3887,6 +4026,26 @@ fn main() {
         .manage(MinerState { child: Mutex::new(None), pubsub: Mutex::new(None), status: Mutex::new(Value::Null) })
         .setup(|app| {
             legacy_cleanup();
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let auth = read_json(auth_path()).unwrap_or(Value::Null);
+                    let has_avatar = !text_of(auth.get("avatarUrl")).is_empty();
+                    if has_avatar {
+                        return;
+                    }
+                    if let Some(token) = load_token() {
+                        let login = text_of(auth.get("login"));
+                        if let Some(avatar) = fetch_avatar(&token, &login) {
+                            store_avatar(&avatar);
+                            if let Some(payload) = read_json(auth_path()) {
+                                set_auth_state(payload);
+                            }
+                            let _ = handle.emit("state", snapshot_from_profile());
+                        }
+                    }
+                });
+            }
             // мусор от прошлых обновлений: скрипт и архив больше не нужны
             let temp = std::env::temp_dir();
             let _ = std::fs::remove_file(temp.join("dropforge-update.ps1"));

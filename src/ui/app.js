@@ -2,6 +2,7 @@ const api = window.dropforge ?? null;
 
 // в приложении только левый клик: убираем контекстное меню WebView2
 let resizeTimer = null;
+let searchTimer = null;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimer);
   resizeTimer = setTimeout(() => {
@@ -13,6 +14,27 @@ window.addEventListener('resize', () => {
 document.addEventListener('contextmenu', (event) => {
   event.preventDefault();
 }, { capture: true });
+
+// пока тянем ползунок, не перерисовываем интерфейс: иначе DOM-элемент
+// пересоздаётся и перетаскивание обрывается
+let sliderDragging = false;
+let sliderPendingRender = false;
+const isSlider = (target) => target && target.matches && target.matches('input[type="range"]');
+document.addEventListener('pointerdown', (event) => {
+  if (isSlider(event.target)) sliderDragging = true;
+}, true);
+const finishSlider = () => {
+  if (!sliderDragging) return;
+  sliderDragging = false;
+  if (sliderPendingRender) {
+    sliderPendingRender = false;
+    render();
+  }
+};
+document.addEventListener('pointerup', finishSlider, true);
+document.addEventListener('pointercancel', finishSlider, true);
+window.addEventListener('blur', finishSlider);
+
 
 
 /* ------------------------------------------------------------------ icons */
@@ -308,8 +330,8 @@ function authScreen() {
       </div>
       <h1 class="auth-title">Дропы копятся, <em>пока вы заняты</em> другими делами</h1>
       <p class="auth-lead">
-        Выберите игру — приложение само найдёт стрим с включёнными Drops, будет смотреть его
-        и заберёт награды. Без открытых вкладок и без скачивания видео.
+        Выберите игру — приложение само найдёт стрим с включёнными Drops, посмотрит его за вас
+        и заберёт награды. Держать вкладки открытыми не нужно.
       </p>
       <div class="auth-points">
         <div class="auth-point">${ICONS.drops}<span><b>Любая игра с Drops.</b> Кампании и прогресс подтягиваются из вашего аккаунта.</span></div>
@@ -328,10 +350,6 @@ function authScreen() {
         </button>
         <p class="auth-note">Подтвердите вход на странице Twitch — приложение получит доступ само, пароль вводить в него не нужно.</p>
         ${device}
-        <div class="divider">или</div>
-        <button type="button" class="btn-ghost wide" data-action="login-browser">
-          ${ICONS.shield} Войти в окне приложения
-        </button>
         <details class="auth-advanced">
           <summary>Вход по токену</summary>
           <div class="field">
@@ -492,10 +510,14 @@ function sidebar() {
     </div>
 
     <div class="account">
-      <div class="avatar">${esc(initials(auth?.user?.login))}</div>
+      <div class="avatar-wrap">
+        <div class="avatar">${esc(initials(auth?.user?.login))}</div>
+        ${auth?.user?.avatarUrl
+          ? `<img class="avatar-img" src="${esc(auth.user.avatarUrl)}" alt="" loading="lazy" onerror="this.remove()" />`
+          : ''}
+      </div>
       <div class="account-meta">
         <div class="account-name">${esc(auth?.user?.login ?? 'не подключён')}</div>
-        <div class="account-sub">${snapshot.pubsub === 'online' ? 'события Twitch: онлайн' : 'события Twitch: офлайн'}</div>
       </div>
       <button class="icon-btn" title="Выйти" data-action="logout">${ICONS.logout}</button>
     </div>
@@ -523,7 +545,7 @@ function topbar() {
 
   const search =
     state.view === 'drops'
-      ? `<div class="search">${ICONS.search}<input id="search" placeholder="Поиск игры" value="${esc(state.query)}" />${state.query ? '<button class="search-clear" data-action="clear-search" title="Сбросить фильтр">×</button>' : ''}</div>`
+      ? `<div class="search">${ICONS.search}<input id="search" placeholder="Поиск игры" value="${esc(state.query)}" />${state.query ? '<button class="search-clear" data-action="clear-search" title="Сбросить фильтр"><svg viewBox="0 0 10 10" width="8" height="8" aria-hidden="true"><path d="M1.5 1.5 8.5 8.5M8.5 1.5 1.5 8.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>' : ''}</div>`
       : '';
 
   const refresh =
@@ -1146,33 +1168,18 @@ function settingsView() {
         <button class="switch ${settings.minimizeToTray === false ? '' : 'on'}" data-action="toggle-setting" data-key="minimizeToTray"></button>
       </div>
 
-      <div class="row">
+      <div class="row" style="flex-direction:column;align-items:stretch;gap:8px">
         <div>
           <div class="row-label">Обновлять склад кампаний</div>
           <div class="row-hint">Раз в ${settings.refreshMinutes ?? 10} минут</div>
         </div>
-        <input class="range" type="range" min="3" max="60" step="1" value="${settings.refreshMinutes ?? 10}" data-input="refresh" />
+        <div style="display:flex;align-items:center;gap:12px">
+          <input id="refresh-slider" type="range" min="3" max="60" step="1" value="${Number(settings.refreshMinutes ?? 10)}" style="flex:1;accent-color:var(--accent)" />
+          <span id="refresh-value" style="min-width:64px;text-align:right;font-family:var(--mono);font-size:12px;color:var(--text-2)">${Number(settings.refreshMinutes ?? 10)} мин</span>
+        </div>
       </div>
     </div>
 
-    <div class="card">
-      <h3>Аккаунт</h3>
-      <p>Данные хранятся локально, в папке приложения.</p>
-      <div class="row">
-        <div>
-          <div class="row-label">${esc(state.snapshot.auth?.user?.login ?? 'не подключён')}</div>
-          <div class="row-hint">${esc(state.snapshot.auth?.tokenPreview ?? '')}</div>
-        </div>
-        <button class="btn-ghost small" data-action="logout">${ICONS.logout} Выйти</button>
-      </div>
-      <div class="row">
-        <div>
-          <div class="row-label">Папка с данными</div>
-          <div class="row-hint">Настройки и сессия Twitch</div>
-        </div>
-        <button class="btn-ghost small" data-action="open-data">${ICONS.folder} Открыть</button>
-      </div>
-    </div>
 
     <div class="card">
       <h3>Обслуживание</h3>
@@ -1192,21 +1199,6 @@ function settingsView() {
         <div class="row-hint">Те же записи, что попадают в отчёт диагностики</div>
         <div style="max-height:220px;overflow:auto;margin-top:8px">${logsView()}</div>
       </div>
-      <div class="row" style="align-items:flex-start">
-        <div style="flex:1">
-          <div class="row-label">Сообщить о проблеме</div>
-          <div class="row-hint">Опишите, что не работает. Отчёт с диагностикой сохранится в «Загрузки», краткая сводка скопируется в буфер</div>
-          <textarea id="problem-text" placeholder="Что случилось?" style="width:100%;min-height:64px;margin-top:8px;background:var(--panel-3);color:var(--fg);border:1px solid var(--line-soft);border-radius:10px;padding:10px;font:inherit;resize:vertical"></textarea>
-        </div>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-top:12px">
-        <div class="row-hint" style="max-width:420px">Файл с отчётом можно отправить в чат или на GitHub</div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn-ghost" data-action="copy-summary">Краткая сводка</button>
-          <button class="btn-primary" data-action="report-issue">Сообщить о проблеме</button>
-        </div>
-      </div>
-
       <div class="row">
         <div>
           <div class="row-label">Обновления</div>
@@ -1219,7 +1211,7 @@ function settingsView() {
 
     <div class="card">
       <h3>О приложении</h3>
-      <p>DropForge — открытый аналог автофарма Twitch Drops. Видео не скачивается: приложение только поддерживает сессию просмотра и следит за прогрессом.</p>
+      <p>DropForge — открытый аналог автофарма Twitch Drops. Приложение поддерживает сессию просмотра и следит за прогрессом.</p>
       <div style="margin-top:10px">
         <button class="btn-ghost small" data-action="open-url" data-url="https://github.com/CreativeNa/dropforge-tauri">Страница проекта на GitHub</button>
       </div>
@@ -1249,6 +1241,10 @@ function legacyBanner() {
 function render() {
   const root = document.getElementById('root');
   if (!root) return;
+  if (sliderDragging) {
+    sliderPendingRender = true;
+    return;
+  }
 
   const searchWasFocused = document.activeElement?.id === 'search';
   const caret = searchWasFocused ? document.activeElement.selectionStart : null;
@@ -1317,16 +1313,9 @@ async function withBusy(key, fn) {
   }
 }
 
+let forceLoggedOut = false;
+
 function applySnapshot(snapshot) {
-  // не даём экрану входа мигнуть, если вход уже был
-  if (
-    snapshot?.auth &&
-    snapshot.auth.loggedIn === false &&
-    state.snapshot?.auth?.loggedIn === true &&
-    !snapshot.auth.error
-  ) {
-    snapshot.auth = state.snapshot.auth;
-  }
   // код устройства приходит в снимке — событий WebView может не быть
   if (snapshot?.device?.userCode) {
     state.device = snapshot.device;
@@ -1544,6 +1533,19 @@ const actions = {
     toast(result?.ok ? 'Журнал скопирован' : 'Не удалось скопировать', result?.ok ? 'info' : 'error');
   },
 
+  async 'logout'() {
+    if (typeof api.logout !== 'function') return;
+    forceLoggedOut = true;
+    try {
+      applySnapshot(await api.logout());
+    } finally {
+      forceLoggedOut = false;
+    }
+    state.view = 'drops';
+    state.sheetGame = null;
+    render();
+  },
+
   async 'copy-summary'() {
     try {
       const result = await api.reportSummary();
@@ -1716,24 +1718,40 @@ document.addEventListener('submit', (event) => {
 
 document.addEventListener('change', (event) => {
   const target = event.target;
-  if (target.id === 'resume-slider') {
-    const value = Math.max(0, Math.min(60, Number(target.value) || 0));
-    Promise.resolve(api.saveSettings({ resumeMinutes: value }))
-      .then((snapshot) => { if (snapshot?.ready) applySnapshot(snapshot); })
-      .catch(() => {});
-  }
+  const sliders = {
+    'resume-slider': { key: 'resumeMinutes', min: 0, max: 60 },
+    'refresh-slider': { key: 'refreshMinutes', min: 3, max: 60 },
+  };
+  const config = sliders[target.id];
+  if (!config) return;
+  const value = Math.max(config.min, Math.min(config.max, Number(target.value) || config.min));
+  if (state.snapshot?.settings) state.snapshot.settings[config.key] = value;
+  Promise.resolve(api.saveSettings({ [config.key]: value })).catch(() => {});
 });
 document.addEventListener('input', (event) => {
   const target = event.target;
-  if (target.id === 'resume-slider') {
-    const label = document.getElementById('resume-value');
+  if (target.id === 'resume-slider' || target.id === 'refresh-slider') {
+    const label = document.getElementById(target.id === 'resume-slider' ? 'resume-value' : 'refresh-value');
     if (label) label.textContent = target.value + ' мин';
+    const key = target.id === 'resume-slider' ? 'resumeMinutes' : 'refreshMinutes';
+    if (state.snapshot?.settings) state.snapshot.settings[key] = Number(target.value) || 0;
     return;
   }
   if (target.id === 'search') {
     state.query = target.value;
     state.page = 0;
-    render();
+    clearTimeout(searchTimer);
+    // перерисовываем с задержкой и возвращаем фокус с позицией каретки,
+    // иначе поле теряет ввод и сетка прыгает на каждый символ
+    searchTimer = setTimeout(() => {
+      const caret = target.selectionStart ?? target.value.length;
+      render();
+      const next = document.getElementById('search');
+      if (next) {
+        next.focus();
+        try { next.setSelectionRange(caret, caret); } catch (error) {}
+      }
+    }, 140);
     return;
     const query = state.query.trim().toLowerCase();
     const section = document.getElementById('games-section');
@@ -1761,9 +1779,7 @@ document.addEventListener('input', (event) => {
     if (empty) empty.hidden = visible > 0;
     return;
   }
-  if (target.dataset.input === 'refresh') {
-    api.saveSettings({ refreshMinutes: Number(target.value) }).catch(() => {});
-  }
+
 });
 
 document.addEventListener('keydown', (event) => {

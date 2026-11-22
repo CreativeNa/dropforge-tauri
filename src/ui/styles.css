@@ -1,3 +1,7 @@
+html {
+  scrollbar-gutter: stable;
+}
+
 :root {
   --bg: #0a0c11;
   --bg-elev: #0f131a;
@@ -461,9 +465,11 @@ button {
   position: relative;
   display: flex;
   align-items: center;
+  width: 240px;
+  flex: 0 0 auto;
 }
 
-.search svg {
+.search > svg {
   position: absolute;
   left: 10px;
   width: 14px;
@@ -473,19 +479,18 @@ button {
 }
 
 .search input {
-  width: 220px;
+  width: 100%;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 9px;
-  padding: 8px 10px 8px 32px;
+  padding: 8px 32px 8px 32px;
   color: var(--text);
   outline: none;
-  transition: border-color 0.15s, width 0.2s;
+  transition: border-color 0.15s;
 }
 
 .search input:focus {
   border-color: var(--accent-line);
-  width: 260px;
 }
 
 .search input::placeholder {
@@ -495,6 +500,7 @@ button {
 .content {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 20px 26px 40px;
   min-height: 0;
 }
@@ -1905,12 +1911,12 @@ button {
     padding: 16px 18px 32px;
   }
 
-  .search input {
-    width: 166px;
+  .search {
+    width: 196px;
   }
 
-  .search input:focus {
-    width: 196px;
+  .search input {
+    width: 100%;
   }
 
   .page-title {
@@ -2177,3 +2183,79 @@ button {
 
 /* место под фиксированный переключатель страниц */
 
+
+.avatar-img {
+  object-fit: cover;
+  border-radius: 10px;
+  padding: 0;
+  background: var(--panel-3);
+}
+
+.avatar-wrap {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  flex: none;
+}
+
+.avatar-wrap .avatar {
+  width: 30px;
+  height: 30px;
+}
+
+.avatar-wrap .avatar-img {
+  position: absolute;
+  inset: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  object-fit: cover;
+}
+
+.search-clear {
+  position: absolute;
+  right: 8px;
+  top: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  margin: auto 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-2);
+  line-height: 0;
+  transform-origin: center;
+  cursor: pointer;
+  animation: search-clear-in 160ms ease-out both;
+  transition: color 0.12s, background 0.12s;
+}
+
+.search-clear svg {
+  position: static;
+  left: auto;
+  width: 8px;
+  height: 8px;
+  display: block;
+  color: inherit;
+}
+
+.search-clear:hover {
+  color: var(--text);
+  background: var(--panel-2);
+}
+
+@keyframes search-clear-in {
+  from {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
