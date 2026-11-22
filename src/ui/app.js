@@ -1,5 +1,20 @@
 const api = window.dropforge ?? null;
 
+// в приложении только левый клик: убираем контекстное меню WebView2
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    state.page = 0;
+    render();
+  }, 250);
+});
+
+document.addEventListener('contextmenu', (event) => {
+  event.preventDefault();
+}, { capture: true });
+
+
 /* ------------------------------------------------------------------ icons */
 
 const ICONS = {
@@ -34,6 +49,7 @@ const state = {
   view: 'drops',
   query: '',
   dropsTab: 'global',
+  page: 0,
   sheetGame: null,
   busy: new Set(),
   device: null,
@@ -287,7 +303,7 @@ function authScreen() {
         <div class="brand-mark">${ICONS.logo}</div>
         <div class="brand-text">
           <span class="brand-name">DropForge</span>
-          <span class="brand-sub">twitch drops automation</span>
+          <span class="brand-sub">Twitch Drops automation</span>
         </div>
       </div>
       <h1 class="auth-title">Дропы копятся, <em>пока вы заняты</em> другими делами</h1>
@@ -451,7 +467,7 @@ function sidebar() {
       <div class="brand-mark">${ICONS.logo}</div>
       <div class="brand-text">
         <span class="brand-name">DropForge</span>
-        <span class="brand-sub">twitch drops</span>
+        <span class="brand-sub">Twitch Drops</span>
       </div>
     </div>
 
@@ -640,10 +656,30 @@ function gamesSection() {
   const local = state.dropsTab === 'local';
   const games = sortedGames();
   const query = state.query.trim().toLowerCase();
-  const visible = games.filter((game) => matchesQuery(game, query)).length;
-  const cards = games
-    .map((game) => gameCard(game, { hidden: !matchesQuery(game, query) }))
-    .join('');
+  const filtered = games.filter((game) => matchesQuery(game, query));
+  const total = filtered.length;
+  // страница = 4 полных ряда карточек; следующая начинается после заполнения
+  const gridWidth = (() => {
+    const content = document.getElementById('content');
+    if (content) return content.clientWidth - 48;
+    return Math.max(320, window.innerWidth - 268 - 48);
+  })();
+  const columns = Math.max(1, Math.floor((gridWidth + 14) / (196 + 14)));
+  const ROWS = 4;
+  const perPage = Math.max(1, columns * ROWS);
+  const pageCount = Math.max(1, Math.ceil(total / perPage));
+  const page = Math.min(Math.max(Number(state.page) || 0, 0), pageCount - 1);
+  state.page = page;
+  const start = page * perPage;
+  const slice = filtered.slice(start, start + perPage);
+  const visible = total;
+  const cards = slice.map((game) => gameCard(game)).join('');
+  const pager = total > 0
+    ? '<div class="pager">' + Array.from({ length: pageCount }, (_, index) =>
+        '<button class="pager-btn ' + (index === page ? 'active' : '') + '" data-action="page" data-page="' + index + '">' + (index + 1) + '</button>',
+      ).join('') + '</div>'
+    : '';
+
 
   return `
   ${local ? localChannelsBlock() : ''}
@@ -654,6 +690,7 @@ function gamesSection() {
   </div>
 
   <div class="games-grid" id="games-grid" ${visible ? '' : 'hidden'}>${cards}</div>
+  ${pager}
   <div class="empty" id="games-empty" ${visible ? 'hidden' : ''}>
     ${local
       ? '<h3>Локальных дропсов нет</h3><p>Проверьте канал выше — приложение покажет кампании, которые Twitch выдаёт только на нём.</p>'
@@ -1091,6 +1128,16 @@ function settingsView() {
         <button class="switch ${settings.sendSpadeEvents ? 'on' : ''}" data-action="toggle-setting" data-key="sendSpadeEvents"></button>
       </div>
 
+      <div class="row" style="flex-direction:column;align-items:stretch;gap:8px">
+        <div>
+          <div class="row-label">Возобновлять фарм после перезапуска</div>
+          <div class="row-hint">Если приложение закрылось, фарм продолжится сам в этом окне. 0 — не возобновлять</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px">
+          <input id="resume-slider" type="range" min="0" max="60" step="1" value="${Number(settings.resumeMinutes ?? 15)}" style="flex:1;accent-color:var(--accent)" />
+          <span id="resume-value" style="min-width:64px;text-align:right;font-family:var(--mono);font-size:12px;color:var(--text-2)">${Number(settings.resumeMinutes ?? 15)} мин</span>
+        </div>
+      </div>
       <div class="row">
         <div>
           <div class="row-label">Сворачивать в трей при закрытии</div>
@@ -1173,6 +1220,9 @@ function settingsView() {
     <div class="card">
       <h3>О приложении</h3>
       <p>DropForge — открытый аналог автофарма Twitch Drops. Видео не скачивается: приложение только поддерживает сессию просмотра и следит за прогрессом.</p>
+      <div style="margin-top:10px">
+        <button class="btn-ghost small" data-action="open-url" data-url="https://github.com/CreativeNa/dropforge-tauri">Страница проекта на GitHub</button>
+      </div>
       <div class="row">
         <div class="row-label muted">Версия</div>
         <div class="mono muted" id="app-version">${esc(state.appVersion ?? '—')}</div>
@@ -1338,11 +1388,18 @@ const actions = {
   },
   'clear-search'() {
     state.query = '';
+    state.page = 0;
+    render();
+  },
+  'page'(target) {
+    state.page = Number(target.dataset.page) || 0;
+    state.scrollTop = 0;
     render();
   },
   'drops-tab'(target) {
     state.dropsTab = target.dataset.tab === 'local' ? 'local' : 'global';
     state.query = '';
+    state.page = 0;
     Promise.resolve(api.saveSettings?.({ dropsTab: state.dropsTab })).catch(() => {});
     render();
   },
@@ -1657,10 +1714,27 @@ document.addEventListener('submit', (event) => {
   if (handler) Promise.resolve(handler(form)).catch((error) => toast(error.message, 'error'));
 });
 
+document.addEventListener('change', (event) => {
+  const target = event.target;
+  if (target.id === 'resume-slider') {
+    const value = Math.max(0, Math.min(60, Number(target.value) || 0));
+    Promise.resolve(api.saveSettings({ resumeMinutes: value }))
+      .then((snapshot) => { if (snapshot?.ready) applySnapshot(snapshot); })
+      .catch(() => {});
+  }
+});
 document.addEventListener('input', (event) => {
   const target = event.target;
+  if (target.id === 'resume-slider') {
+    const label = document.getElementById('resume-value');
+    if (label) label.textContent = target.value + ' мин';
+    return;
+  }
   if (target.id === 'search') {
     state.query = target.value;
+    state.page = 0;
+    render();
+    return;
     const query = state.query.trim().toLowerCase();
     const section = document.getElementById('games-section');
     if (!section) {

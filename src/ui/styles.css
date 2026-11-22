@@ -26,6 +26,10 @@
   box-sizing: border-box;
 }
 
+body {
+  font-variant-numeric: tabular-nums;
+}
+
 [hidden] {
   display: none !important;
 }
@@ -134,8 +138,6 @@ button {
 .brand-sub {
   font-size: 10.5px;
   color: var(--muted);
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
 }
 
 .nav {
@@ -207,10 +209,8 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--muted);
+  font-size: 12px;
+  color: var(--text-2);
 }
 
 .farm-status-line {
@@ -232,7 +232,6 @@ button {
 .status-dot.on {
   background: var(--ok);
   box-shadow: 0 0 0 3px var(--ok-soft);
-  animation: pulse 2.4s infinite;
 }
 
 .status-dot.busy {
@@ -371,7 +370,7 @@ button {
   font-weight: 650;
   font-size: 12px;
   color: var(--accent);
-  text-transform: uppercase;
+  
   flex: none;
   overflow: hidden;
 }
@@ -518,9 +517,7 @@ button {
 }
 
 .stat-label {
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-size: 11px;
   color: var(--muted);
 }
 
@@ -570,15 +567,14 @@ button {
   border: 1px solid var(--line-soft);
   text-align: left;
   padding: 0;
-  transition: transform 0.16s ease, border-color 0.16s, box-shadow 0.16s;
+  transition: border-color 0.16s, background-color 0.16s;
   display: flex;
   flex-direction: column;
 }
 
 .game-card:hover {
-  transform: translateY(-2px);
   border-color: #334052;
-  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+  background: var(--panel-2);
 }
 
 .game-card.selected {
@@ -597,11 +593,6 @@ button {
   height: 100%;
   object-fit: cover;
   display: block;
-  transition: transform 0.35s ease;
-}
-
-.game-card:hover .game-art img {
-  transform: scale(1.035);
 }
 
 .game-art::after {
@@ -642,13 +633,12 @@ button {
 }
 
 .badge {
-  font-size: 10px;
-  font-weight: 620;
-  letter-spacing: 0.04em;
+  font-size: 10.5px;
+  font-weight: 500;
   padding: 3px 7px;
   border-radius: 6px;
-  backdrop-filter: blur(8px);
-  text-transform: uppercase;
+  background: rgba(10, 12, 17, 0.72);
+  color: var(--text-2);
 }
 
 .badge.live {
@@ -716,13 +706,12 @@ button {
 .bar > i {
   display: block;
   height: 100%;
-  background: linear-gradient(90deg, #ffb066, #f2853a);
+  background: var(--text-2);
   border-radius: 99px;
-  transition: width 0.4s ease;
 }
 
 .bar.ok > i {
-  background: linear-gradient(90deg, #6fe3a1, #3cbf77);
+  background: var(--ok);
 }
 
 .game-foot {
@@ -785,7 +774,7 @@ button {
   display: grid;
   place-items: center;
   color: var(--text-2);
-  transition: all 0.14s;
+  transition: color 0.14s, border-color 0.14s, background-color 0.14s;
 }
 
 .pick:hover {
@@ -1000,8 +989,6 @@ button {
 
 .device-code .device-label {
   font-size: 10.5px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
   color: var(--muted);
 }
 
@@ -1568,8 +1555,6 @@ button {
   align-items: center;
   gap: 6px;
   font-size: 10.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
   color: var(--muted);
 }
 
@@ -1696,8 +1681,6 @@ button {
 
 .live-head {
   font-size: 10px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
   color: var(--muted);
 }
 
@@ -2165,3 +2148,32 @@ button {
   font-size: 13px;
 }
 .legacy-banner code { font-size: 12px; opacity: 0.8; }
+
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 18px;
+}
+.pager-btn {
+  min-width: 24px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 6px;
+  border: 1px solid #2a3140;
+  background: #121722;
+  color: #cfd6e4;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pager-btn:hover { border-color: #3d4b63; }
+.pager-btn.active {
+  background: #2b303b;
+  color: #98a2b3;
+  border-color: #3a4252;
+  cursor: default;
+}
+
+/* место под фиксированный переключатель страниц */
+

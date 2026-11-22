@@ -74,8 +74,37 @@
       'pubsub',
     ],
   };
-  // лёгкий опрос: сначала отпечаток состояния, сам снимок — только если он изменился
+  // каталог кампаний приходит один раз, дальше — только дельта прогресса
+  let cachedCampaigns = [];
   let lastStamp = "";
+  const applyDelta = (snapshot) => {
+    if (!snapshot) return snapshot;
+    if (Array.isArray(snapshot.campaigns) && snapshot.campaigns.length) {
+      cachedCampaigns = snapshot.campaigns;
+      return snapshot;
+    }
+    if (snapshot.progressDrops && cachedCampaigns.length) {
+      const drops = snapshot.progressDrops;
+      snapshot.campaigns = cachedCampaigns.map((campaign) => ({
+        ...campaign,
+        drops: (campaign.drops ?? []).map((drop) => {
+          const state = drops[drop.id];
+          if (!state) return drop;
+          const current = Number(state.currentMinutes) || 0;
+          const required = Number(drop.requiredMinutes) || 0;
+          const claimed = Boolean(state.isClaimed);
+          return {
+            ...drop,
+            currentMinutes: current,
+            remainingMinutes: Math.max(0, required - current),
+            progress: required > 0 ? Math.min(1, current / required) : 0,
+            isClaimed: claimed,
+          };
+        }),
+      }));
+    }
+    return snapshot;
+  };
   let timer = null;
   const pull = async () => {
     try {
@@ -83,7 +112,7 @@
       const stamp = info?.stamp ?? "";
       if (stamp && stamp !== lastStamp) {
         lastStamp = stamp;
-        const snapshot = await invoke("app_snapshot");
+        const snapshot = applyDelta(await invoke("app_snapshot", { since: lastStamp }));
         emit("state", snapshot);
       }
     } catch {

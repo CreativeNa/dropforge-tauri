@@ -1781,6 +1781,8 @@ static GAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static GAME_INDEX: Mutex<usize> = Mutex::new(0);
 static STOPPING: Mutex<bool> = Mutex::new(false);
 static WATCH_GEN: Mutex<u64> = Mutex::new(0);
+static LAST_TICK: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+static WATCHDOG_EVENTS: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
 static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 static STATUS: Mutex<Value> = Mutex::new(Value::Null);
 static LOGS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
@@ -1815,6 +1817,19 @@ fn pubsub_exe() -> Option<std::path::PathBuf> {
 fn first_badge_target() -> Option<(String, String)> {
     let snapshot = snapshot_from_profile();
     let badges = snapshot.get("badges")?.as_array()?.clone();
+    // что уже есть в профиле — нужно для проверки эволюций
+    let progress = read_json(progress_path()).unwrap_or(Value::Null);
+    let mut owned: std::collections::HashSet<String> = progress
+        .get("availableBadges")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().map(|item| text_of(item.get("title"))).collect())
+        .unwrap_or_default();
+    if let Some(items) = progress.get("earnedRewards").and_then(Value::as_array) {
+        for item in items {
+            owned.insert(text_of(item.get("name")));
+        }
+    }
+    let now = chrono::Utc::now();
     for badge in badges {
         let paid = badge.get("paid").and_then(Value::as_bool).unwrap_or(true);
         let claimed = badge.get("claimed").and_then(Value::as_bool).unwrap_or(true);
@@ -1822,6 +1837,23 @@ fn first_badge_target() -> Option<(String, String)> {
         let local = badge.get("local").and_then(Value::as_bool).unwrap_or(false);
         if paid || claimed || minutes <= 0.0 || local {
             continue;
+        }
+        // кампания уже закончилась — фармить бессмысленно
+        let expired = badge
+            .get("endsAt")
+            .and_then(Value::as_str)
+            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+            .map(|value| value.with_timezone(&chrono::Utc) < now)
+            .unwrap_or(false);
+        if expired {
+            continue;
+        }
+        // эволюция без нужного покемона недостижима
+        let name = text_of(badge.get("name"));
+        if let Some(required) = evolution_prereq(&name) {
+            if !owned.contains(required) {
+                continue;
+            }
         }
         let slug = text_of(badge.get("gameSlug"));
         if slug.is_empty() {
@@ -1831,6 +1863,56 @@ fn first_badge_target() -> Option<(String, String)> {
         return Some((slug, name));
     }
     None
+}
+
+/// Если вотчер жив, но тиков нет — перезапускаем (не больше 3 раз за 10 минут).
+fn start_watchdog(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(60));
+        let running = STATUS
+            .lock()
+            .unwrap()
+            .get("running")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if !running {
+            continue;
+        }
+        let idle = LAST_TICK
+            .lock()
+            .unwrap()
+            .map(|at| at.elapsed())
+            .unwrap_or_default();
+        if idle < std::time::Duration::from_secs(180) {
+            continue;
+        }
+        let allowed = {
+            let mut events = WATCHDOG_EVENTS.lock().unwrap();
+            events.retain(|at| at.elapsed() < std::time::Duration::from_secs(600));
+            if events.len() >= 3 {
+                false
+            } else {
+                events.push(std::time::Instant::now());
+                true
+            }
+        };
+        if !allowed {
+            continue;
+        }
+        let games = GAMES.lock().unwrap().clone();
+        let index = *GAME_INDEX.lock().unwrap();
+        let slug = games
+            .get(index % games.len().max(1))
+            .cloned()
+            .unwrap_or_default();
+        push_log("warn", format!("Вотчер молчит {} с — перезапускаю", idle.as_secs()));
+        stop_miner();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        *STOPPING.lock().unwrap() = false;
+        let _ = start_miner(Some(app.clone()), &slug);
+        *LAST_TICK.lock().unwrap() = Some(std::time::Instant::now());
+        let _ = app.emit("state", snapshot_from_profile());
+    });
 }
 
 fn start_background(app: tauri::AppHandle) {
@@ -1858,13 +1940,58 @@ fn start_background(app: tauri::AppHandle) {
             .get("running")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        if auto_badges && !running {
+        // жёсткая привязка: если в очереди есть игры, авто-бейджи не имеют права
+        // переключать фарм на другую категорию
+        let queue_empty = load_settings()
+            .get("games")
+            .and_then(Value::as_array)
+            .map(|items| items.is_empty())
+            .unwrap_or(true);
+        if auto_badges && !running && queue_empty {
             if let Some((slug, name)) = first_badge_target() {
                 push_log("info", format!("Беру бесплатный бейдж: {name}"));
                 let _ = start_miner(Some(app.clone()), &slug);
             }
         }
         let _ = app.emit("state", snapshot_from_profile());
+    });
+}
+
+fn update_tray_tooltip(app: &tauri::AppHandle) {
+    let Some(holder) = app.try_state::<TrayHolder>() else { return };
+    let guard = holder.0.lock().unwrap();
+    let Some(tray) = guard.as_ref() else { return };
+    let status = STATUS.lock().unwrap().clone();
+    let running = status.get("running").and_then(Value::as_bool).unwrap_or(false);
+    let game = text_of(status.get("game"));
+    let channel = text_of(status.get("channel").and_then(|value| value.get("login")));
+    let minutes = read_json(progress_path())
+        .and_then(|progress| progress.get("watch").and_then(|watch| watch.get("currentMinutes")).and_then(Value::as_f64))
+        .unwrap_or(0.0);
+    let idle_seconds = LAST_TICK
+        .lock()
+        .unwrap()
+        .map(|at| at.elapsed().as_secs())
+        .unwrap_or(0);
+    let text = if running {
+        format!(
+            "DropForge — фарм идёт: {} / {} · {} мин · проверка {} с назад",
+            if channel.is_empty() { "канал" } else { &channel },
+            if game.is_empty() { "игра" } else { &game },
+            minutes.round(),
+            idle_seconds
+        )
+    } else {
+        format!("DropForge — простой · последняя проверка {} с назад", idle_seconds)
+    };
+    let short: String = text.chars().take(120).collect();
+    let _ = tray.set_tooltip(Some(short.as_str()));
+}
+
+fn start_tray_updater(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        update_tray_tooltip(&app);
+        std::thread::sleep(std::time::Duration::from_secs(15));
     });
 }
 
@@ -2251,6 +2378,7 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
         *generation += 1;
         *generation
     };
+    *LAST_TICK.lock().unwrap() = Some(std::time::Instant::now());
     match command.spawn() {
         Ok(mut child) => {
             let pid = child.id();
@@ -2288,6 +2416,7 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
                             .and_then(|progress| progress.get("dropID"))
                             .map(|value| text_of(Some(value)))
                             .unwrap_or_default();
+                        *LAST_TICK.lock().unwrap() = Some(std::time::Instant::now());
                         if let Some(minutes) = minutes {
                             record_watch_progress(&slug_owned, &drop_id, minutes);
                         }
@@ -2344,6 +2473,7 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
             *guard = Some(child);
             let scope = if is_local_campaign { "локальная кампания" } else { "глобальная кампания" };
             let message = format!("Смотрю {login} · {scope}");
+            save_farm_state(true, slug, &login);
             *STATUS.lock().unwrap() = json!({
                 "state": "watching",
                 "running": true,
@@ -2362,6 +2492,7 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
 }
 
 fn stop_miner() -> Value {
+    save_farm_state(false, "", "");
     *STOPPING.lock().unwrap() = true;
     let mut guard = CHILD.lock().unwrap();
     if let Some(mut child) = guard.take() {
@@ -2960,6 +3091,8 @@ fn snapshot_from_profile() -> Value {
             "localChannel": settings.get("localChannel").cloned().unwrap_or(json!("")),
             "localCheck": settings.get("localCheck").cloned().unwrap_or(Value::Null),
             "dropsTab": settings.get("dropsTab").cloned().unwrap_or(json!("global")),
+            "resumeMinutes": settings.get("resumeMinutes").cloned().unwrap_or(json!(15)),
+            "autoBadges": settings.get("autoBadges").cloned().unwrap_or(json!(true)),
         },
         "stats": {
             "games": games.len(),
@@ -3028,6 +3161,20 @@ fn record_watch_progress(slug: &str, drop_id: &str, minutes: f64) {
     }
 }
 
+fn farm_state_path() -> PathBuf {
+    profile_dir().join("farm-state.json")
+}
+
+fn save_farm_state(running: bool, game: &str, channel: &str) {
+    let payload = json!({
+        "running": running,
+        "game": game,
+        "channel": channel,
+        "at": chrono::Utc::now().to_rfc3339(),
+    });
+    let _ = std::fs::write(farm_state_path(), serde_json::to_string(&payload).unwrap_or_default());
+}
+
 fn settings_path() -> PathBuf {
     profile_dir().join("settings.json")
 }
@@ -3043,7 +3190,8 @@ fn load_settings() -> Value {
             "autoClaim": true,
             "autoBadges": true,
             "refreshMinutes": 10,
-            "priorityMode": "ending-soonest"
+            "priorityMode": "ending-soonest",
+            "resumeMinutes": 15
         })
     })
 }
@@ -3449,9 +3597,42 @@ fn app_snapshot_stamp() -> Value {
     json!({ "stamp": format!("{:x}", hasher.finish()) })
 }
 
+/// Отпечаток каталога: пока он не меняется, не гоняем 250 КБ кампаний в UI.
+fn catalog_stamp() -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    if let Ok(meta) = std::fs::metadata(profile_dir().join("catalog-cache.json")) {
+        meta.len().hash(&mut hasher);
+        if let Ok(modified) = meta.modified() {
+            if let Ok(span) = modified.duration_since(std::time::UNIX_EPOCH) {
+                span.as_nanos().hash(&mut hasher);
+            }
+        }
+    }
+    format!("{:x}", hasher.finish())
+}
+
+fn snapshot_for_ui(since: Option<String>) -> Value {
+    let mut snapshot = snapshot_from_profile();
+    let stamp = catalog_stamp();
+    let same_catalog = since.as_deref() == Some(stamp.as_str());
+    if let Some(object) = snapshot.as_object_mut() {
+        object.insert("catalogStamp".into(), json!(stamp));
+        if same_catalog {
+            if let Some(progress) = read_json(progress_path()) {
+                if let Some(drops) = progress.get("drops") {
+                    object.insert("progressDrops".into(), drops.clone());
+                }
+            }
+            object.insert("campaigns".into(), json!([]));
+        }
+    }
+    snapshot
+}
+
 #[tauri::command]
-fn app_snapshot() -> Value {
-    snapshot_from_profile()
+fn app_snapshot(since: Option<String>) -> Value {
+    snapshot_for_ui(since)
 }
 
 #[tauri::command]
@@ -3744,6 +3925,73 @@ fn main() {
                     });
                 }
             }
+            // автовозобновление фарма после перезапуска
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    let state = read_json(farm_state_path()).unwrap_or(Value::Null);
+                    if !state.get("running").and_then(Value::as_bool).unwrap_or(false) {
+                        return;
+                    }
+                    let game = text_of(state.get("game"));
+                    if game.is_empty() {
+                        return;
+                    }
+                    let at = state
+                        .get("at")
+                        .and_then(Value::as_str)
+                        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                        .map(|value| value.with_timezone(&chrono::Utc));
+                    let elapsed = at.map(|value| (chrono::Utc::now() - value).num_seconds()).unwrap_or(i64::MAX);
+                    let window_minutes = load_settings()
+                        .get("resumeMinutes")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(15);
+                    if window_minutes == 0 {
+                        save_farm_state(false, "", "");
+                        return;
+                    }
+                    let mut resume = elapsed <= (window_minutes as i64) * 60;
+                    if !resume {
+                        // прошло больше 15 минут: сначала обновляем каталог
+                        let _ = refresh_catalog();
+                        let cache = read_json(profile_dir().join("catalog-cache.json")).unwrap_or(Value::Null);
+                        let now = chrono::Utc::now();
+                        resume = cache
+                            .get("campaigns")
+                            .and_then(Value::as_array)
+                            .map(|items| {
+                                items.iter().any(|campaign| {
+                                    text_of(campaign.get("game").and_then(|game| game.get("slug"))) == game
+                                        && campaign
+                                            .get("endsAt")
+                                            .and_then(Value::as_str)
+                                            .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+                                            .map(|value| value.with_timezone(&chrono::Utc) > now)
+                                            .unwrap_or(false)
+                                })
+                            })
+                            .unwrap_or(false);
+                    }
+                    if !resume {
+                        save_farm_state(false, "", "");
+                        return;
+                    }
+                    let queue = settings_games();
+                    let mut games = queue;
+                    if !games.iter().any(|slug| slug == &game) {
+                        games.insert(0, game.clone());
+                    }
+                    let first = games.first().cloned().unwrap_or(game);
+                    *GAMES.lock().unwrap() = games;
+                    *GAME_INDEX.lock().unwrap() = 0;
+                    *STOPPING.lock().unwrap() = false;
+                    push_log("info", format!("Автовозобновление фарма: {first}"));
+                    let _ = start_miner(Some(handle.clone()), &first);
+                    let _ = handle.emit("state", snapshot_from_profile());
+                });
+            }
+
             if let Some(token) = load_token() {
                 let user_id = read_json(auth_path())
                     .and_then(|value| value.get("userId").cloned())
@@ -3751,6 +3999,8 @@ fn main() {
                     .unwrap_or_default();
                 start_pubsub(app.handle().clone(), &app.state::<MinerState>(), token, user_id);
                 start_background(app.handle().clone());
+                start_watchdog(app.handle().clone());
+                start_tray_updater(app.handle().clone());
             }
             // Иконка в трее: свернуть в трей и выйти
             let show = MenuItem::with_id(app, "show", "Открыть DropForge", true, None::<&str>)?;
@@ -3826,6 +4076,13 @@ fn main() {
         .expect("не удалось собрать окно DropForge")
         .run(|handle, event| {
             if let tauri::RunEvent::Exit = event {
+                let status = STATUS.lock().unwrap().clone();
+                let running = status.get("running").and_then(Value::as_bool).unwrap_or(false);
+                if running {
+                    let game = text_of(status.get("game"));
+                    let channel = text_of(status.get("channel").and_then(|value| value.get("login")));
+                    save_farm_state(true, &game, &channel);
+                }
                 // убираем иконку из трея до выхода, иначе Windows показывает её до наведения
                 if let Some(holder) = handle.try_state::<TrayHolder>() {
                     let _ = holder.0.lock().unwrap().take();
