@@ -3066,6 +3066,10 @@ fn snapshot_from_profile() -> Value {
                     None => String::new(),
                 };
                 let note = if evolution_note.is_empty() { note.to_string() } else { evolution_note };
+                let blocked_evolution = prereq.map(|_| !evolution_ready).unwrap_or(false);
+                // финальная награда кампании с платными дропами бесплатно не выдаётся
+                let blocked_paid = campaign_has_paid && minutes > 0.0 && subs <= 0.0;
+                let available = !paid && minutes > 0.0 && !blocked_evolution && !blocked_paid;
                 badges.push(json!({
                     "id": benefit_id,
                     "name": benefit.get("name"),
@@ -3080,6 +3084,7 @@ fn snapshot_from_profile() -> Value {
                     "requiredMinutes": minutes,
                     "requiredSubs": subs,
                     "paid": paid,
+                    "available": available,
                     "note": note,
                     "webUrl": campaign_url,
                     "claimed": claimed,

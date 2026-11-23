@@ -476,7 +476,7 @@ function sidebar() {
   const running = Boolean(status?.running);
   const readyGames = snapshot.settings?.games?.length ?? 0;
   const badgesFree = (snapshot.badges ?? []).filter(
-    (badge) => !badge.paid && !badge.claimed && Number(badge.requiredMinutes) > 0,
+    (badge) => badge.available && !badge.claimed,
   ).length;
 
   return `
@@ -1034,13 +1034,16 @@ function badgeRow(badge) {
     : badge.paid
       ? `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
           <button class="paid-link" data-action="open-category" data-slug="${esc(badge.gameSlug)}" data-name="${esc(badge.game ?? badge.campaign ?? '')}" title="Открыть категорию на Twitch">
-            <span class="paid-label">платный</span><span class="paid-hover">открыть категорию</span>
+            <span class="paid-label">Платный</span>
+            <span class="paid-sub">открыть категорию</span>
           </button>
           ${badge.webUrl ? `<button class="btn-ghost small" data-action="open-url" data-url="${esc(badge.webUrl)}">Условия</button>` : ''}
         </div>`
       : badge.evolution && !badge.evolutionReady
         ? `<button class="btn-ghost small" disabled title="Сначала нужен ${esc(badge.evolutionRequires)}" style="opacity:.45;cursor:not-allowed">Фармить</button>`
-        : `<button class="btn-ghost small" data-action="farm-game" data-slug="${esc(badge.gameSlug)}">Фармить</button>`;
+        : badge.available === false
+          ? `<button class="btn-ghost small" disabled title="${esc(badge.note || 'Сейчас недоступен')}" style="opacity:.45;cursor:not-allowed">Недоступен</button>`
+          : `<button class="btn-ghost small" data-action="farm-game" data-slug="${esc(badge.gameSlug)}">Фармить</button>`;
   return `
   <div class="drop-row">
     <div class="drop-thumb">
@@ -1071,7 +1074,7 @@ function badgesView() {
         </section>`
       : '';
   const claimedCount = badges.filter((badge) => badge.claimed).length;
-  const freeLeft = free.filter((badge) => !badge.claimed).length;
+  const freeLeft = free.filter((badge) => badge.available && !badge.claimed).length;
   return `
   <div class="stats-row">
     <div class="stat"><div class="stat-label">Всего</div><div class="stat-value">${badges.length}</div></div>
