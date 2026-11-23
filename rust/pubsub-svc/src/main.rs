@@ -72,11 +72,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (socket, _) = connect_async(PUBSUB_URL).await?;
     let (mut sink, mut stream) = socket.split();
 
-    let topics = if user.is_empty() {
+    let extra = value_of("--topics").unwrap_or_default();
+    let mut topics = if user.is_empty() {
         Vec::new()
     } else {
         vec![format!("user-drop-events.{user}")]
     };
+    for topic in extra.split(',').map(str::trim).filter(|topic| !topic.is_empty()) {
+        if !topics.iter().any(|item| item == topic) {
+            topics.push(topic.to_string());
+        }
+    }
 
     let nonce = format!("dropforge-{}", std::process::id());
     if !topics.is_empty() {

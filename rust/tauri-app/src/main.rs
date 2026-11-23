@@ -1340,7 +1340,11 @@ fn device_agent() -> ureq::Agent {
 
 /// Запрос кода устройства: Twitch выдаёт код и ссылку активации.
 fn device_start() -> Result<Value, String> {
-    let body = format!("client_id={}&scopes=", url_encode(DEVICE_CLIENT_ID));
+    let body = format!(
+        "client_id={}&scopes={}",
+        url_encode(DEVICE_CLIENT_ID),
+        url_encode("user:read:follows")
+    );
     let response = device_agent()
         .post("https://id.twitch.tv/oauth2/device")
         .header("Client-Id", DEVICE_CLIENT_ID)
@@ -1912,6 +1916,10 @@ static LAST_TICK: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static WATCHDOG_EVENTS: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
 static PUBSUB_EVENTS: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
 static CHILD: Mutex<Option<Child>> = Mutex::new(None);
+static STREAK_CHILD: Mutex<Option<Child>> = Mutex::new(None);
+static STREAK_ACTIVE: Mutex<Value> = Mutex::new(Value::Null);
+static STREAK_PENDING_AT: Mutex<i64> = Mutex::new(0);
+static STREAK_DATA: Mutex<()> = Mutex::new(());
 static STATUS: Mutex<Value> = Mutex::new(Value::Null);
 static LOGS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 static DEVICE: Mutex<Value> = Mutex::new(Value::Null);
@@ -2185,6 +2193,757 @@ fn start_tray_updater(app: tauri::AppHandle) {
     });
 }
 
+
+/* ------------------------------------------------------- watch streak keeper */
+
+fn streak_path() -> PathBuf {
+    profile_dir().join("streaks.json")
+}
+
+fn load_streaks() -> Value {
+    read_json(streak_path()).unwrap_or_else(|| json!({ "channels": [] }))
+}
+
+fn save_streaks(value: &Value) {
+    let _ = std::fs::write(streak_path(), serde_json::to_string_pretty(value).unwrap_or_default());
+}
+
+fn streak_cfg() -> Value {
+    load_settings()
+        .get("streakKeeper")
+        .cloned()
+        .unwrap_or_else(|| json!({}))
+}
+
+fn streak_flag(key: &str, default: bool) -> bool {
+    streak_cfg().get(key).and_then(Value::as_bool).unwrap_or(default)
+}
+
+fn streak_number(key: &str, default: u64) -> u64 {
+    streak_cfg().get(key).and_then(Value::as_u64).unwrap_or(default)
+}
+
+fn today() -> String {
+    chrono::Local::now().format("%Y-%m-%d").to_string()
+}
+
+fn pseudo_random(max: u64) -> u64 {
+    if max == 0 {
+        return 0;
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|value| value.subsec_nanos() as u64)
+        .unwrap_or(0);
+    nanos % max
+}
+
+fn streak_reset_day(data: &mut Value) {
+    let date = today();
+    let changed = data.get("date").and_then(Value::as_str) != Some(date.as_str());
+    if !changed {
+        return;
+    }
+    data["date"] = json!(date);
+    if let Some(items) = data["channels"].as_array_mut() {
+        for item in items {
+            item["watchedToday"] = json!(false);
+        }
+    }
+}
+
+fn streak_view() -> Value {
+    let cfg = streak_cfg();
+    let mut data = load_streaks();
+    streak_reset_day(&mut data);
+    let mut sessions = data.get("sessions").and_then(Value::as_array).cloned().unwrap_or_default();
+    sessions.reverse();
+    sessions.truncate(20);
+    json!({
+        "enabled": cfg.get("enabled").and_then(Value::as_bool).unwrap_or(false),
+        "dailyLimit": cfg.get("dailyLimit").and_then(Value::as_u64).unwrap_or(5),
+        "minMinutes": cfg.get("minMinutes").and_then(Value::as_u64).unwrap_or(6),
+        "maxMinutes": cfg.get("maxMinutes").and_then(Value::as_u64).unwrap_or(20),
+        "delayMaxMinutes": cfg.get("delayMaxMinutes").and_then(Value::as_u64).unwrap_or(7),
+        "active": STREAK_ACTIVE.lock().unwrap().clone(),
+        "pendingAt": *STREAK_PENDING_AT.lock().unwrap(),
+        "channels": data.get("channels").cloned().unwrap_or(json!([])),
+        "sessions": json!(sessions),
+    })
+}
+
+fn streak_gql(query: &str, variables: Value, token: &str) -> Option<Value> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .user_agent("Mozilla/5.0 DropForge/1.1")
+        .build()
+        .new_agent();
+    let body = json!({ "query": query, "variables": variables }).to_string();
+    let request = agent
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", &auth_client_id())
+        .header("Authorization", &format!("OAuth {token}"))
+        .header("Content-Type", "application/json")
+        .send(body);
+    let mut response = match request {
+        Ok(response) => response,
+        Err(_) => return None,
+    };
+    match response.body_mut().read_json::<Value>() {
+        Ok(value) => Some(value),
+        Err(_) => None,
+    }
+}
+
+fn fetch_watch_streaks(token: &str, logins: &[String]) -> std::collections::HashMap<String, u64> {
+    let mut result = std::collections::HashMap::new();
+    for chunk in logins.chunks(12) {
+        let mut parts = Vec::new();
+        for (index, login) in chunk.iter().enumerate() {
+            parts.push(format!(
+                "c{index}: channel(name:\"{login}\") {{ self {{ viewerMilestones {{ value category }} }} }}"
+            ));
+        }
+        let query = format!("query {{ {} }}", parts.join(" "));
+        let Some(response) = streak_gql(&query, json!({}), token) else { continue };
+        let Some(data) = response.get("data") else { continue };
+        for (index, login) in chunk.iter().enumerate() {
+            let key = format!("c{index}");
+            let value = data
+                .get(&key)
+                .and_then(|channel| channel.get("self"))
+                .and_then(|me| me.get("viewerMilestones"))
+                .and_then(Value::as_array)
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .find(|item| text_of(item.get("category")) == "WATCH_STREAK")
+                })
+                .and_then(|item| text_of(item.get("value")).parse::<u64>().ok());
+            if let Some(value) = value {
+                result.insert(login.clone(), value);
+            }
+        }
+    }
+    result
+}
+
+fn refresh_streak_live() {
+    let _guard = STREAK_DATA.lock().unwrap();
+    let token = match load_token() {
+        Some(token) => token,
+        None => return,
+    };
+    let mut data = load_streaks();
+    let logins: Vec<String> = data
+        .get("channels")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().map(|item| text_of(item.get("login"))).filter(|login| !login.is_empty()).collect())
+        .unwrap_or_default();
+    if logins.is_empty() {
+        return;
+    }
+    let mut live_map: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut broadcast_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for chunk in logins.chunks(50) {
+        let response = streak_gql(
+            "query($logins:[String!]!){ users(logins:$logins){ login stream { id } } }",
+            json!({ "logins": chunk }),
+            &token,
+        );
+        let Some(response) = response else { continue };
+        if let Some(items) = response
+            .get("data")
+            .and_then(|data| data.get("users"))
+            .and_then(Value::as_array)
+        {
+            for item in items {
+                let login = text_of(item.get("login"));
+                let live = item.get("stream").map(|stream| !stream.is_null()).unwrap_or(false);
+                if !login.is_empty() {
+                    let broadcast = item
+                        .get("stream")
+                        .and_then(|stream| stream.get("id"))
+                        .map(|value| text_of(Some(value)))
+                        .unwrap_or_default();
+                    if !broadcast.is_empty() {
+                        broadcast_map.insert(login.clone(), broadcast);
+                    }
+                    live_map.insert(login, live);
+                }
+            }
+        }
+    }
+    let streak_map = fetch_watch_streaks(&token, &logins);
+    if let Some(items) = data["channels"].as_array_mut() {
+        for item in items {
+            let login = text_of(item.get("login"));
+            if let Some(live) = live_map.get(&login) {
+                item["live"] = json!(*live);
+            }
+            if let Some(streak) = streak_map.get(&login) {
+                let previous = item.get("streak").and_then(Value::as_u64);
+                item["streak"] = json!(*streak);
+                if previous != Some(*streak) {
+                    item["streakChangedAt"] = json!(chrono::Utc::now().to_rfc3339());
+                    if previous.map(|value| *streak > value).unwrap_or(false) {
+                        item["streakGainedAt"] = json!(chrono::Utc::now().to_rfc3339());
+                    }
+                }
+            }
+            if let Some(broadcast) = broadcast_map.get(&login) {
+                item["broadcastId"] = json!(*broadcast);
+            }
+        }
+    }
+    data["liveCheckedAt"] = json!(chrono::Utc::now().to_rfc3339());
+    save_streaks(&data);
+}
+
+fn refresh_follows() -> Result<usize, String> {
+    let token = load_token().ok_or("нет входа")?;
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(25)))
+        .user_agent("Mozilla/5.0 DropForge/1.1")
+        .build()
+        .new_agent();
+    let response: Value = agent
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", &auth_client_id())
+        .header("Authorization", &format!("OAuth {token}"))
+        .header("Content-Type", "application/json")
+        .send(json!({
+            "operationName": "ChannelFollows",
+            "variables": { "limit": 100, "order": "ASC" },
+            "extensions": {
+                "persistedQuery": {
+                    "version": 1,
+                    "sha256Hash": "eecf815273d3d949e5cf0085cc5084cd8a1b5b7b6f7990cf43cb0beadf546907"
+                }
+            }
+        }).to_string())
+        .ok()
+        .and_then(|response| response.into_body().read_json::<Value>().ok())
+        .ok_or("нет ответа от Twitch")?;
+    let edges = response
+        .get("data")
+        .and_then(|data| data.get("user"))
+        .and_then(|user| user.get("follows"))
+        .and_then(|follows| follows.get("edges"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if edges.is_empty() {
+        return Err("не удалось получить подписки: нужен повторный вход со скоупом user:read:follows".into());
+    }
+    let mut data = load_streaks();
+    let existing: Vec<Value> = data
+        .get("channels")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut channels: Vec<Value> = Vec::new();
+    let excluded: Vec<String> = streak_cfg()
+        .get("excluded")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().map(|item| text_of(Some(item)).to_lowercase()).collect())
+        .unwrap_or_else(|| {
+            vec![
+                "diloindys".to_string(),
+                "mersufy".to_string(),
+                "7tvapp".to_string(),
+                "ravenbtw".to_string(),
+            ]
+        });
+    for edge in edges {
+        let Some(node) = edge.get("node") else { continue };
+        let login = text_of(node.get("login"));
+        if excluded.iter().any(|item| item == &login.to_lowercase()) {
+            continue;
+        }
+        let id = text_of(node.get("id"));
+        if login.is_empty() || id.is_empty() {
+            continue;
+        }
+        let previous = existing
+            .iter()
+            .find(|item| text_of(item.get("login")) == login)
+            .cloned()
+            .unwrap_or(Value::Null);
+        channels.push(json!({
+            "login": login,
+            "id": id,
+            "avatar": text_of(node.get("profileImageURL")),
+            "live": previous.get("live").and_then(Value::as_bool).unwrap_or(false),
+            "watchedToday": previous.get("watchedToday").and_then(Value::as_bool).unwrap_or(false),
+            "lastWatchedAt": previous.get("lastWatchedAt").cloned().unwrap_or(Value::Null),
+        }));
+    }
+    streak_reset_day(&mut data);
+    let channels: Vec<Value> = channels
+        .into_iter()
+        .filter(|item| {
+            let login = text_of(item.get("login")).to_lowercase();
+            !excluded.iter().any(|name| name == &login)
+        })
+        .collect();
+    data["channels"] = json!(channels);
+    data["updatedAt"] = json!(chrono::Utc::now().to_rfc3339());
+    save_streaks(&data);
+    refresh_streak_live();
+    Ok(channels_len(&data))
+}
+
+fn channels_len(data: &Value) -> usize {
+    data.get("channels").and_then(Value::as_array).map(|items| items.len()).unwrap_or(0)
+}
+
+fn streak_topics() -> String {
+    load_streaks()
+        .get("channels")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .take(80)
+                .map(|item| text_of(item.get("id")))
+                .filter(|id| !id.is_empty())
+                .map(|id| format!("video-playback-by-id.{id}"))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .unwrap_or_default()
+}
+
+fn streak_mark_live(channel_id: &str, live: bool) {
+    let _guard = STREAK_DATA.lock().unwrap();
+    if channel_id.is_empty() {
+        return;
+    }
+    let mut data = load_streaks();
+    streak_reset_day(&mut data);
+    let mut changed = false;
+    if let Some(items) = data["channels"].as_array_mut() {
+        for item in items {
+            if text_of(item.get("id")) == channel_id {
+                item["live"] = json!(live);
+                if live {
+                    item["lastLiveAt"] = json!(chrono::Utc::now().to_rfc3339());
+                }
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        save_streaks(&data);
+    }
+}
+
+fn stop_streak() {
+    let active = STREAK_ACTIVE.lock().unwrap().clone();
+    if let Some(mut child) = STREAK_CHILD.lock().unwrap().take() {
+        let _ = child.kill();
+    }
+    *STREAK_ACTIVE.lock().unwrap() = Value::Null;
+    *STREAK_PENDING_AT.lock().unwrap() = 0;
+    let login = text_of(active.get("login"));
+    if !login.is_empty() {
+        let points_before = active.get("pointsBefore").and_then(Value::as_u64);
+        finish_streak_session(&login, points_before, None);
+    }
+}
+
+fn channel_points(token: &str, login: &str) -> Option<u64> {
+    let response = streak_gql(
+        "query($login:String!){ channel(name:$login){ self { communityPoints { balance } } } }",
+        json!({ "login": login }),
+        token,
+    )?;
+    response
+        .get("data")
+        .and_then(|data| data.get("channel"))
+        .and_then(|channel| channel.get("self"))
+        .and_then(|me| me.get("communityPoints"))
+        .and_then(|points| points.get("balance"))
+        .and_then(Value::as_u64)
+}
+
+fn finish_streak_session(login: &str, points_before: Option<u64>, app: Option<tauri::AppHandle>) {
+    let _guard = STREAK_DATA.lock().unwrap();
+    let token = load_token().unwrap_or_default();
+    let points_after = channel_points(&token, login);
+    let delta = match (points_before, points_after) {
+        (Some(before), Some(after)) if after > before => Some(after - before),
+        _ => None,
+    };
+    let mut data = load_streaks();
+    streak_reset_day(&mut data);
+    let mut gained = false;
+    finish_session_record(login, points_after, delta.map(|value| value > 449).unwrap_or(false));
+    if let Some(items) = data["channels"].as_array_mut() {
+        for item in items {
+            if text_of(item.get("login")) != login {
+                continue;
+            }
+            item["watchedToday"] = json!(true);
+            item["lastWatchedAt"] = json!(chrono::Utc::now().to_rfc3339());
+            let broadcast = text_of(item.get("broadcastId"));
+            if !broadcast.is_empty() {
+                item["lastWatchedBroadcast"] = json!(broadcast);
+            }
+            if delta.map(|value| value > 449).unwrap_or(false) {
+                item["streakGainedAt"] = json!(chrono::Utc::now().to_rfc3339());
+                item["streakGainedPoints"] = json!(delta.unwrap_or(0));
+                gained = true;
+            }
+            if let Some(value) = delta {
+                item["pointsDelta"] = json!(value);
+            }
+        }
+    }
+    save_streaks(&data);
+    push_log(
+        "info",
+        format!(
+            "Стрик: просмотр {login} завершён{}",
+            match delta {
+                Some(value) if gained => format!(" · серия продлена, +{value} баллов"),
+                Some(value) => format!(" · +{value} баллов"),
+                None => String::new(),
+            }
+        ),
+    );
+    if let Some(handle) = app {
+        let _ = handle.emit("state", snapshot_from_profile());
+    }
+}
+
+fn close_open_sessions(login: Option<&str>) {
+    let mut data = load_streaks();
+    let ended_at = chrono::Utc::now().to_rfc3339();
+    let mut changed = false;
+    if let Some(sessions) = data["sessions"].as_array_mut() {
+        for session in sessions.iter_mut() {
+            if !session.get("endedAt").map(Value::is_null).unwrap_or(true) {
+                continue;
+            }
+            if let Some(target) = login {
+                if text_of(session.get("login")) != target {
+                    continue;
+                }
+            }
+            session["endedAt"] = json!(ended_at);
+            session["pointsAfter"] = Value::Null;
+            changed = true;
+        }
+    }
+    if changed {
+        save_streaks(&data);
+    }
+}
+
+fn record_session_start(login: &str, started_at: &str, points_before: Option<u64>, minutes: u64, unlimited: bool) {
+    let _guard = STREAK_DATA.lock().unwrap();
+    close_open_sessions(Some(login));
+    let mut data = load_streaks();
+    let mut sessions = data
+        .get("sessions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    sessions.push(json!({
+        "login": login,
+        "startedAt": started_at,
+        "endedAt": Value::Null,
+        "pointsBefore": points_before,
+        "pointsAfter": Value::Null,
+        "minutes": if unlimited { 0 } else { minutes },
+        "unlimited": unlimited,
+        "gained": false,
+    }));
+    let len = sessions.len();
+    if len > 100 {
+        sessions.drain(0..len - 100);
+    }
+    data["sessions"] = json!(sessions);
+    save_streaks(&data);
+}
+
+fn finish_session_record(login: &str, points_after: Option<u64>, gained: bool) {
+    let mut data = load_streaks();
+    let ended_at = chrono::Utc::now().to_rfc3339();
+    if let Some(sessions) = data["sessions"].as_array_mut() {
+        for session in sessions.iter_mut().rev() {
+            if text_of(session.get("login")) == login && session.get("endedAt").map(Value::is_null).unwrap_or(true) {
+                session["endedAt"] = json!(ended_at);
+                session["pointsAfter"] = json!(points_after);
+                session["gained"] = json!(gained);
+                break;
+            }
+        }
+    }
+    save_streaks(&data);
+}
+
+fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &str, minutes: u64) -> Value {
+    if !STREAK_ACTIVE.lock().unwrap().is_null() {
+        return json!({ "error": "просмотр уже идёт" });
+    }
+    let Some(exe) = watcher_exe() else {
+        return json!({ "error": "watcher-svc не найден" });
+    };
+    let token = load_token().unwrap_or_default();
+    if token.is_empty() {
+        return json!({ "error": "нужен вход в Twitch" });
+    }
+    let user_id = text_of(auth_state().get("userId"));
+    let points_before = channel_points(&token, login);
+    let unlimited = minutes == 0;
+    record_session_start(login, &chrono::Utc::now().to_rfc3339(), points_before, minutes, unlimited);
+    let watch_minutes = if unlimited { 10080 } else { minutes };
+    if let Some(mut child) = STREAK_CHILD.lock().unwrap().take() {
+        let _ = child.kill();
+    }
+    let mut command = Command::new(&exe);
+    command
+        .args([
+            "--channel", login,
+            "--channel-id", channel_id,
+            "--user", &user_id,
+            "--minutes", &watch_minutes.to_string(),
+            "--interval", "30",
+            "--stdin-token",
+            "--exit-on-stdin-close",
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped());
+    hide_console(&mut command);
+    let Ok(mut child) = command.spawn() else {
+        return json!({ "error": "не удалось запустить просмотр" });
+    };
+    if let Some(stdin) = child.stdin.as_mut() {
+        use std::io::Write;
+        let _ = writeln!(stdin, "{token}");
+    }
+    let stdout = child.stdout.take();
+    *STREAK_CHILD.lock().unwrap() = Some(child);
+
+    let until = if unlimited {
+        0
+    } else {
+        chrono::Utc::now().timestamp() + (minutes as i64) * 60
+    };
+    *STREAK_ACTIVE.lock().unwrap() = json!({
+        "login": login,
+        "channelId": channel_id,
+        "minutes": if unlimited { 0 } else { minutes },
+        "until": until,
+        "unlimited": unlimited,
+        "pointsBefore": points_before,
+    });
+    push_log(
+        "info",
+        if unlimited {
+            format!("Стрик: смотрю {login} без ограничения по времени")
+        } else {
+            format!("Стрик: смотрю {login} ~{minutes} мин")
+        },
+    );
+
+    if let Some(stdout) = stdout {
+        let handle = app.clone();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
+                if event.get("event").and_then(Value::as_str) == Some("error") {
+                    push_log("warn", format!("Стрик watcher: {}", text_of(event.get("message"))));
+                }
+            }
+        });
+    }
+
+    if !unlimited {
+        let handle = app.clone();
+        let login_owned = login.to_string();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_secs(minutes * 60));
+            if let Some(mut child) = STREAK_CHILD.lock().unwrap().take() {
+                let _ = child.kill();
+            }
+            *STREAK_ACTIVE.lock().unwrap() = Value::Null;
+            finish_streak_session(&login_owned, points_before, handle);
+        });
+    }
+
+    json!({ "ok": true, "login": login, "minutes": minutes, "unlimited": unlimited })
+}
+
+fn streak_candidates() -> Vec<Value> {
+    let _guard = STREAK_DATA.lock().unwrap();
+    let mut data = load_streaks();
+    streak_reset_day(&mut data);
+    save_streaks(&data);
+    data.get("channels")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| item.get("live").and_then(Value::as_bool).unwrap_or(false))
+                .filter(|item| !item.get("watchedToday").and_then(Value::as_bool).unwrap_or(false))
+                .filter(|item| {
+                    let broadcast = text_of(item.get("broadcastId"));
+                    let watched = text_of(item.get("lastWatchedBroadcast"));
+                    broadcast.is_empty() || broadcast != watched
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn start_streak_scheduler(app: tauri::AppHandle) {
+    std::thread::spawn(move || {
+        let mut ticks: u64 = 0;
+        loop {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        ticks += 1;
+        if ticks % 10 == 0 {
+            refresh_streak_live();
+            let _ = app.emit("state", snapshot_from_profile());
+        }
+        if !streak_flag("enabled", false) {
+            *STREAK_PENDING_AT.lock().unwrap() = 0;
+            continue;
+        }
+        let farm_running = STATUS
+            .lock()
+            .unwrap()
+            .get("running")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        if farm_running || !STREAK_ACTIVE.lock().unwrap().is_null() {
+            continue;
+        }
+        let candidates = streak_candidates();
+        if candidates.is_empty() {
+            *STREAK_PENDING_AT.lock().unwrap() = 0;
+            continue;
+        }
+        let watched_today = load_streaks()
+            .get("channels")
+            .and_then(Value::as_array)
+            .map(|items| items.iter().filter(|item| item.get("watchedToday").and_then(Value::as_bool).unwrap_or(false)).count())
+            .unwrap_or(0);
+        if watched_today >= streak_number("dailyLimit", 5) as usize {
+            continue;
+        }
+        let now = chrono::Utc::now().timestamp();
+        let mut pending = STREAK_PENDING_AT.lock().unwrap();
+        if *pending == 0 {
+            let delay_max = streak_number("delayMaxMinutes", 7).max(1);
+            *pending = now + pseudo_random(delay_max * 60) as i64 + 1;
+            drop(pending);
+            let _ = app.emit("state", snapshot_from_profile());
+            continue;
+        }
+        if now < *pending {
+            continue;
+        }
+        *pending = 0;
+        drop(pending);
+        let candidate = &candidates[0];
+        let login = text_of(candidate.get("login"));
+        let channel_id = text_of(candidate.get("id"));
+        let min = streak_number("minMinutes", 6).max(1);
+        let max = streak_number("maxMinutes", 20).max(min);
+        let minutes = min + pseudo_random(max - min + 1);
+        let result = start_streak_watch(Some(app.clone()), &login, &channel_id, minutes);
+        let _ = app.emit("log", json!({
+            "at": "",
+            "level": "info",
+            "message": format!("Стрик: автозапуск {login} — {result}")
+        }));
+        let _ = app.emit("state", snapshot_from_profile());
+        }
+    });
+}
+
+fn restart_pubsub(app: &tauri::AppHandle) {
+    let token = load_token().unwrap_or_default();
+    let user_id = text_of(auth_state().get("userId"));
+    if token.is_empty() {
+        return;
+    }
+    if let Some(state) = app.try_state::<MinerState>() {
+        if let Some(mut child) = state.pubsub.lock().unwrap().take() {
+            let _ = child.kill();
+        }
+        start_pubsub(app.clone(), &state, token, user_id);
+    }
+}
+
+#[tauri::command]
+fn streak_stop(app: tauri::AppHandle) -> Value {
+    stop_streak();
+    let _ = app.emit("state", snapshot_from_profile());
+    streak_view()
+}
+
+#[tauri::command]
+fn streak_snapshot() -> Value {
+    streak_view()
+}
+
+#[tauri::command]
+fn streak_settings_save(app: tauri::AppHandle, patch: Value) -> Value {
+    let mut settings = load_settings();
+    let mut keeper = settings.get("streakKeeper").cloned().unwrap_or_else(|| json!({}));
+    if let (Some(target), Some(source)) = (keeper.as_object_mut(), patch.as_object()) {
+        for (key, value) in source {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+    settings["streakKeeper"] = keeper;
+    let _ = save_settings(&settings);
+    let _ = app.emit("state", snapshot_from_profile());
+    streak_view()
+}
+
+#[tauri::command]
+fn streak_refresh(app: tauri::AppHandle) -> Value {
+    let result = refresh_follows();
+    if result.is_ok() {
+        restart_pubsub(&app);
+    }
+    let _ = app.emit("state", snapshot_from_profile());
+    let _ = app.emit("log", json!({
+        "at": "",
+        "level": "info",
+        "message": match &result {
+            Ok(count) => format!("Стрики: подписки обновлены ({count})"),
+            Err(error) => format!("Стрики: {error}"),
+        }
+    }));
+    match result {
+        Ok(count) => json!({ "ok": true, "count": count }),
+        Err(error) => json!({ "error": error }),
+    }
+}
+
+#[tauri::command]
+fn streak_watch(app: tauri::AppHandle, login: String, channel_id: String, minutes: Option<u64>) -> Value {
+    let minutes = match minutes {
+        Some(value) => value,
+        None => {
+            let min = streak_number("minMinutes", 6).max(1);
+            let max = streak_number("maxMinutes", 20).max(min);
+            min + pseudo_random(max - min + 1)
+        }
+    };
+    start_streak_watch(Some(app), &login, &channel_id, minutes)
+}
+
 fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_id: String) {
     let Some(exe) = pubsub_exe() else {
         let _ = app.emit("log", json!({ "at": "", "level": "warn", "message": "pubsub-svc не найден" }));
@@ -2192,7 +2951,7 @@ fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_i
     };
     let mut command = Command::new(&exe);
     command
-        .args(["--stdin-token", "--user", &user_id, "--seconds", "86400", "--exit-on-stdin-close"])
+        .args(["--stdin-token", "--user", &user_id, "--seconds", "86400", "--exit-on-stdin-close", "--topics", &streak_topics()])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped());
     hide_console(&mut command);
@@ -2220,6 +2979,18 @@ fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_i
                 Some("message") => {
                     let topic = text_of(event.get("topic"));
                     let payload = text_of(event.get("payload"));
+                    if let Some(channel_id) = topic.strip_prefix("video-playback-by-id.") {
+                        let parsed: Value = serde_json::from_str(&payload).unwrap_or(Value::Null);
+                        let kind = text_of(parsed.get("type"));
+                        if kind == "stream-up" {
+                            streak_mark_live(channel_id, true);
+                            push_log("info", format!("Стрик: канал {channel_id} в эфире"));
+                            let _ = handle.emit("state", snapshot_from_profile());
+                        } else if kind == "stream-down" {
+                            streak_mark_live(channel_id, false);
+                            let _ = handle.emit("state", snapshot_from_profile());
+                        }
+                    }
                     let _ = handle.emit("log", json!({
                         "at": "",
                         "level": "info",
@@ -3320,6 +4091,7 @@ fn snapshot_from_profile() -> Value {
         },
         "status": status_value(),
         "pubsub": "offline",
+        "streak": streak_view(),
         "lastRefresh": cache.get("at"),
         "settings": {
             "games": settings.get("games").cloned().unwrap_or(json!([])),
@@ -3439,7 +4211,15 @@ fn load_settings() -> Value {
             "autoBadges": true,
             "refreshMinutes": 10,
             "priorityMode": "ending-soonest",
-            "resumeMinutes": 15
+            "resumeMinutes": 15,
+            "streakKeeper": {
+                "enabled": false,
+                "dailyLimit": 5,
+                "minMinutes": 6,
+                "maxMinutes": 20,
+                "delayMaxMinutes": 7,
+                "excluded": ["diloindys", "mersufy", "7tvapp", "ravenbtw"]
+            }
         })
     })
 }
@@ -3730,6 +4510,7 @@ fn drops_claim_all(app: tauri::AppHandle) -> Value {
 
 #[tauri::command]
 fn farm_start(app: tauri::AppHandle) -> Value {
+    stop_streak();
     let settings = read_json(profile_dir().join("settings.json")).unwrap_or(Value::Null);
     let games: Vec<String> = settings
         .get("games")
@@ -4354,6 +5135,21 @@ fn main() {
                 });
             }
 
+            // подписки и серии подтягиваем фоном при каждом запуске
+            {
+                let handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    if load_token().is_none() {
+                        return;
+                    }
+                    if let Ok(count) = refresh_follows() {
+                        push_log("info", format!("Стрики: подписки загружены ({count})"));
+                    }
+                    refresh_streak_live();
+                    let _ = handle.emit("state", snapshot_from_profile());
+                });
+            }
+
             if let Some(token) = load_token() {
                 let user_id = read_json(auth_path())
                     .and_then(|value| value.get("userId").cloned())
@@ -4364,6 +5160,11 @@ fn main() {
                 start_watchdog(app.handle().clone());
                 start_pubsub_watchdog(app.handle().clone());
                 start_tray_updater(app.handle().clone());
+                start_streak_scheduler(app.handle().clone());
+                {
+                    let _guard = STREAK_DATA.lock().unwrap();
+                    close_open_sessions(None);
+                }
             }
             // Иконка в трее: свернуть в трей и выйти
             let show = MenuItem::with_id(app, "show", "Открыть DropForge", true, None::<&str>)?;
@@ -4433,6 +5234,11 @@ fn main() {
             update_install,
             app_quit,
             clipboard_copy_text,
+            streak_snapshot,
+            streak_settings_save,
+            streak_refresh,
+            streak_watch,
+            streak_stop,
             not_wired
         ])
         .build(tauri::generate_context!())

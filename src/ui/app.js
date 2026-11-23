@@ -54,6 +54,7 @@ const ICONS = {
   logout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h4v16h-4"/><path d="M11 8l4 4-4 4M15 12H3"/></svg>',
   shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v6c0 4.4-3 7.5-7 9-4-1.5-7-4.6-7-9V6l7-3Z"/><path d="m9 12 2 2 4-4"/></svg>',
   bolt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z"/></svg>',
+  flame: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3s5 4.5 5 9a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5 0 2 1 3 2 3 0-2 1-5 1-7.5Z"/></svg>',
   gift: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10h16v10H4z"/><path d="M2 6h20v4H2zM12 6v14"/><path d="M12 6S9.5 2 7.5 3.4C5.8 4.6 7 6 12 6Zm0 0s2.5-4 4.5-2.6C18.2 4.6 17 6 12 6Z"/></svg>',
   folder: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h6l2 2h10v10H3z"/></svg>',
   star: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="m12 3.7 2.5 5.1 5.6.8-4 4 1 5.6-5.1-2.7-5.1 2.7 1-5.6-4-4 5.6-.8Z"/></svg>',
@@ -69,6 +70,10 @@ let pendingSheetGame = null;
 const state = {
   snapshot: null,
   view: 'drops',
+  streakMenu: false,
+  streakChannel: null,
+  streakClosing: false,
+  streakAnimating: false,
   query: '',
   dropsTab: 'global',
   page: 0,
@@ -334,6 +339,25 @@ function demoSnapshot() {
 
 /* ---------------------------------------------------------------- auth view */
 
+function deviceOverlay() {
+  return `
+  <div class="device-overlay">
+    <div class="device-card">
+      <h3>Переподключение Twitch</h3>
+      <p class="row-hint">Открой страницу подтверждения и введи код. Профиль и настройки не сбросятся.</p>
+      <div class="device-code">
+        <div class="device-label">Код подтверждения</div>
+        <div class="code">${esc(state.device.userCode ?? '')}</div>
+        <div class="device-status"><span class="spinner"></span> Ждём подтверждения в браузере…</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn-primary" data-action="open-activation">Открыть страницу Twitch</button>
+        <button class="btn-ghost" data-action="cancel-device">Отмена</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 function authScreen() {
   const error = state.error ? `<div class="error-box">${esc(state.error)}</div>` : '';
   const device = state.device
@@ -527,6 +551,9 @@ function sidebar() {
       <button class="nav-item ${state.view === 'badges' ? 'active' : ''}" data-action="nav" data-view="badges">
         ${ICONS.gift} Бейджи ${badgesFree ? `<span class="nav-badge">${badgesFree}</span>` : ''}
       </button>
+      <button class="nav-item ${state.view === 'streaks' ? 'active' : ''}" data-action="nav" data-view="streaks">
+        ${ICONS.flame} Стрики
+      </button>
       <button class="nav-item ${state.view === 'settings' ? 'active' : ''}" data-action="nav" data-view="settings">
         ${ICONS.gear} Настройки
       </button>
@@ -562,11 +589,15 @@ function topbar() {
       ? 'Дропы'
       : state.view === 'badges'
         ? 'Бейджи'
-        : state.view === 'logs'
-          ? 'Журнал'
-          : 'Настройки';
+        : state.view === 'streaks'
+          ? 'Стрики'
+          : state.view === 'logs'
+            ? 'Журнал'
+            : 'Настройки';
   const subtitle =
-    state.view === 'drops'
+    state.view === 'streaks'
+      ? 'Серии просмотра каналов из подписок'
+      : state.view === 'drops'
       ? `${snapshot.stats.games} игр · ${snapshot.stats.campaigns} кампаний · ${snapshot.stats.drops} дропов`
       : state.view === 'badges'
         ? `Значки профиля Twitch · ${(snapshot.badges ?? []).filter((badge) => badge.claimed).length} из ${(snapshot.badges ?? []).length} получено`
@@ -1161,6 +1192,231 @@ function updateBlock() {
     </div>`;
 }
 
+function streakSheet() {
+  const streak = state.snapshot.streak ?? {};
+  const channels = streak.channels ?? [];
+  const channel = channels.find((item) => item.login === state.streakChannel);
+  if (!channel) return '';
+  const sessions = (streak.sessions ?? []).filter((session) => session.login === channel.login);
+  const fmtTime = (value) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const sameDay = date.toDateString() === new Date().toDateString();
+    const time = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    return sameDay ? time : date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + time;
+  };
+  const deltas = sessions
+    .map((session) => {
+      const before = Number(session.pointsBefore);
+      const after = Number(session.pointsAfter);
+      return before > 0 && after > 0 ? after - before : null;
+    })
+    .filter((value) => value !== null && Number.isFinite(value));
+  const totalMinutes = sessions.reduce((sum, session) => sum + (Number(session.minutes) || 0), 0);
+  const totalPoints = deltas.reduce((sum, value) => sum + value, 0);
+  const best = deltas.length ? Math.max(...deltas) : null;
+  const gainedCount = sessions.filter((session) => session.gained).length;
+  const streakValue = Number(channel.streak) > 0 ? channel.streak : null;
+  const status = channel.live ? 'В эфире' : channel.watchedToday ? 'Смотрел сегодня' : 'Офлайн';
+
+  const rows = sessions.map((session, index) => {
+    const before = Number(session.pointsBefore);
+    const after = Number(session.pointsAfter);
+    const hasBefore = Number.isFinite(before) && before > 0;
+    const hasAfter = Number.isFinite(after) && after > 0;
+    const delta = hasBefore && hasAfter ? after - before : null;
+    const started = fmtTime(session.startedAt);
+    const ended = session.endedAt ? fmtTime(session.endedAt) : 'сейчас';
+    const minutes = Number(session.minutes) || 0;
+    return `
+      <div class="streak-sheet-row" style="animation-delay:${index * 26}ms">
+        <div class="streak-sheet-time">${started} → ${ended}</div>
+        <div class="streak-sheet-points">
+          <span>${hasBefore ? before.toLocaleString('ru-RU') : '—'}</span>
+          <span class="arrow">→</span>
+          <span>${hasAfter ? after.toLocaleString('ru-RU') : '—'}</span>
+          ${delta !== null ? `<b class="${delta > 449 ? 'gain' : delta > 0 ? 'plus' : ''}">${delta > 0 ? '+' : ''}${delta}</b>` : ''}
+        </div>
+        <div class="streak-sheet-dur">${session.unlimited ? '∞' : minutes + ' мин'}</div>
+        ${session.gained ? '<span class="streak-sheet-gain">серия</span>' : ''}
+      </div>`;
+  }).join('');
+
+  return `
+  <div class="streak-sheet-backdrop${state.streakClosing ? '' : ' open'}" data-action="streak-sheet-close"></div>
+  <aside class="streak-sheet${state.streakClosing ? ' closing' : state.streakAnimating ? ' opening' : ' open'}" role="dialog" aria-label="Статистика ${esc(channel.login)}">
+    <div class="streak-sheet-grab"></div>
+    <header class="streak-sheet-head">
+      <div class="streak-sheet-avatar">
+        ${channel.avatar ? `<img src="${esc(channel.avatar)}" alt="" onerror="this.remove()" />` : esc((channel.login ?? '?').slice(0, 1).toUpperCase())}
+      </div>
+      <div class="streak-sheet-title">
+        <div class="streak-sheet-name">${esc(channel.login)}</div>
+        <div class="streak-sheet-status"><span class="streak-dot${channel.live ? '' : ' offline'}"></span>${status}</div>
+      </div>
+      <div class="streak-sheet-series">
+        <b>${streakValue ?? '—'}</b>
+        <span>серия</span>
+      </div>
+      <button class="streak-sheet-close" data-action="streak-sheet-close" title="Закрыть">×</button>
+    </header>
+    <div class="streak-sheet-metrics">
+      <div><b>${sessions.length}</b><span>просмотров</span></div>
+      <div><b>${totalMinutes}</b><span>минут</span></div>
+      <div><b>${deltas.length ? (totalPoints > 0 ? '+' : '') + totalPoints : '—'}</b><span>баллов</span></div>
+      <div><b>${best !== null ? (best > 0 ? '+' : '') + best : '—'}</b><span>лучший прирост</span></div>
+      <div><b>${gainedCount}</b><span>продлений</span></div>
+    </div>
+    <div class="streak-sheet-list">
+      ${rows || '<div class="streak-sheet-empty">Просмотров этого канала ещё не было. Запусти просмотр — здесь появятся время, баллы и результат.</div>'}
+    </div>
+  </aside>`;
+}
+
+
+function closeStreakSheet() {
+  state.streakClosing = true;
+  state.streakAnimating = false;
+  const backdrop = document.querySelector('.streak-sheet-backdrop');
+  if (backdrop) backdrop.classList.remove('open');
+  render();
+  setTimeout(() => {
+    state.streakChannel = null;
+    state.streakClosing = false;
+    render();
+  }, 260);
+}
+
+function streaksView() {
+  const streak = state.snapshot.streak ?? {};
+  const channels = (streak.channels ?? []).filter((channel) => channel && channel.login);
+  const live = channels.filter((item) => item.live);
+  const online = live.length;
+  const withStreak = channels.filter((item) => Number(item.streak) > 0).length;
+  const watched = channels.filter((item) => item.watchedToday).length;
+  const limit = Number(streak.dailyLimit ?? 5);
+  const min = Number(streak.minMinutes ?? 6);
+  const max = Number(streak.maxMinutes ?? 20);
+  const delay = Number(streak.delayMaxMinutes ?? 7);
+  const active = streak.active;
+  const enabled = Boolean(streak.enabled);
+  const maxStreak = channels.reduce((best, item) => Math.max(best, Number(item.streak) || 0), 0);
+
+  const card = (channel, compact) => {
+    const streakValue = Number(channel.streak) > 0 ? channel.streak : null;
+    const gained = channel.streakGainedAt
+      && new Date(channel.streakGainedAt).toDateString() === new Date().toDateString();
+    const counted = channel.watchedToday
+      && channel.broadcastId
+      && channel.broadcastId === channel.lastWatchedBroadcast;
+    const status = gained
+      ? 'Серия продлена сегодня'
+      : counted
+        ? 'Этот эфир уже засчитан'
+        : channel.live
+          ? 'В эфире'
+          : channel.watchedToday
+            ? 'Смотрел сегодня'
+            : 'Офлайн';
+    return `
+      <div class="streak-card${channel.live ? ' live' : ''}${channel.watchedToday ? ' done' : ''}${compact ? ' compact' : ''}" data-action="streak-card" data-login="${esc(channel.login)}">
+        <div class="streak-avatar">
+          ${channel.avatar ? `<img src="${esc(channel.avatar)}" alt="" loading="lazy" onerror="this.remove()" />` : esc((channel.login ?? '?').slice(0, 1).toUpperCase())}
+        </div>
+        <div class="streak-info">
+          <div class="streak-name">${esc(channel.login)}${channel.live ? '<span class="streak-dot"></span>' : ''}</div>
+          <div class="streak-status">${status}${channel.watchedToday && channel.live ? ' · отмечен' : ''}</div>
+        </div>
+        <div class="streak-days${streakValue ? '' : ' no-value'}">
+          <b>${streakValue ?? '—'}</b>
+          <span>серия</span>
+        </div>
+        ${channel.live && !active
+          ? `<button class="streak-watch" data-action="streak-watch" data-login="${esc(channel.login)}" data-id="${esc(channel.id)}" title="Смотреть сейчас">${ICONS.play}</button>`
+          : '<span class="streak-watch spacer"></span>'}
+      </div>`;
+  };
+
+  const liveCards = live.map((channel) => card(channel, false)).join('');
+  const otherChannels = channels
+    .filter((channel) => !channel.live)
+    .sort((a, b) => (Number(b.streak) || 0) - (Number(a.streak) || 0) || String(a.login).localeCompare(String(b.login)));
+  const otherCards = otherChannels.map((channel) => card(channel, true)).join('');
+
+  return `
+  <div class="streak-hero">
+    <div class="streak-hero-main">
+      <div class="streak-kicker">Watch Streak Keeper</div>
+      <h2>Серии под контролем</h2>
+      <p>Приложение заходит на живые каналы из подписок и смотрит их, пока фарм дропов стоит. Заход со случайной задержкой, просмотр ${min}–${max} минут.</p>
+      <div class="streak-metrics">
+        <div class="streak-metric"><b>${withStreak}</b><span>с серией</span></div>
+        <div class="streak-metric"><b>${online}</b><span>в эфире</span></div>
+        <div class="streak-metric"><b>${watched}<i>/${limit}</i></b><span>сегодня</span></div>
+        <div class="streak-metric"><b>${maxStreak}</b><span>лучшая серия</span></div>
+      </div>
+    </div>
+    <div class="streak-hero-side">
+      <div class="streak-power-wrap">
+        <button class="streak-power${enabled ? ' on' : ''}" data-action="streak-toggle" aria-pressed="${enabled}">
+          <span class="streak-power-ring"></span>
+          <span class="streak-power-text">${enabled ? 'Автопилот включён' : 'Автопилот выключен'}</span>
+          <span class="streak-power-switch"></span>
+        </button>
+        <button class="streak-power-more" data-action="streak-menu" title="Запустить просмотр без ограничения">▾</button>
+        ${state.streakMenu ? `
+          <div class="streak-menu">
+            <div class="streak-menu-title">Смотреть без ограничения</div>
+            ${live.length
+              ? live.map((channel) => `
+                <button class="streak-menu-item" data-action="streak-watch" data-login="${esc(channel.login)}" data-id="${esc(channel.id)}" data-minutes="0">
+                  <span class="streak-menu-avatar">${channel.avatar ? `<img src="${esc(channel.avatar)}" alt="" />` : esc((channel.login ?? '?').slice(0, 1).toUpperCase())}</span>
+                  <span class="streak-menu-login">${esc(channel.login)}</span>
+                  <span class="streak-menu-inf">∞</span>
+                </button>`).join('')
+              : '<div class="streak-menu-empty">Нет каналов в эфире</div>'}
+          </div>` : ''}
+      </div>
+      <button class="streak-stop" data-action="streak-stop" ${active ? '' : 'disabled'}>Стоп</button>
+      ${active
+        ? `<div class="streak-active"><span class="spinner"></span><span>Смотрю ${esc(active.login)}</span><em>${active.unlimited ? '∞' : `~${active.minutes} мин`}</em></div>`
+        : `<div class="streak-idle">${online ? `${online} ${online === 1 ? 'канал' : 'каналов'} в эфире` : 'Никто из подписок не в эфире'}</div>`}
+    </div>
+  </div>
+
+  <div class="streak-toolbar">
+    <div class="streak-limit">
+      <span>Каналов в сутки</span>
+      <input class="streak-limit-input" type="number" min="1" max="20" value="${limit}" data-action="streak-limit" />
+    </div>
+    <div class="streak-toolbar-info">задержка до ${delay} мин · ${channels.length} каналов в подписках</div>
+    <div class="streak-toolbar-actions">
+      <button class="btn-ghost small" data-action="streak-refresh">Обновить список</button>
+      <button class="btn-ghost small" data-action="streak-relink">Переподключить Twitch</button>
+    </div>
+  </div>
+
+  <div class="streak-section">
+    <div class="streak-section-head">
+      <h3>Сейчас в эфире</h3>
+      <span>${online}/${channels.length}</span>
+    </div>
+    ${liveCards || '<div class="streak-empty">Пока никто из подписок не в эфире. Как только стример начнёт трансляцию, он появится здесь.</div>'}
+  </div>
+
+  <div class="streak-section">
+    <div class="streak-section-head">
+      <h3>Все подписки</h3>
+      <span>${channels.length}</span>
+    </div>
+    <div class="streak-grid">
+      ${otherCards || '<div class="streak-empty">Список пуст. Нажми «Обновить список»: для подписок нужен вход через Twitch.</div>'}
+    </div>
+  </div>
+`;
+}
+
 function settingsView() {
   const settings = state.snapshot.settings ?? {};
   return `
@@ -1300,7 +1556,9 @@ function render() {
       ? dropsView()
       : state.view === 'badges'
         ? badgesView()
-        : settingsView();
+        : state.view === 'streaks'
+          ? streaksView()
+          : settingsView();
 
   root.innerHTML = `
     <div class="app">
@@ -1311,7 +1569,9 @@ function render() {
         <div class="content" id="content">${content}</div>
       </main>
     </div>
-    ${state.sheetGame ? sheet() : ''}`;
+    ${state.sheetGame ? sheet() : ''}
+    ${state.streakChannel ? streakSheet() : ''}
+    ${state.device && state.snapshot.auth?.loggedIn ? deviceOverlay() : ''}`;
 
   const contentEl = document.getElementById('content');
   if (contentEl) contentEl.scrollTop = state.scrollTop;
@@ -1582,6 +1842,81 @@ const actions = {
     render();
   },
 
+  'streak-card'(target) {
+    state.streakChannel = target.dataset.login;
+    state.streakClosing = false;
+    state.streakAnimating = true;
+    render();
+    setTimeout(() => {
+      state.streakAnimating = false;
+    }, 340);
+  },
+
+  'streak-sheet-close'() {
+    closeStreakSheet();
+  },
+
+  async 'streak-menu'() {
+    state.streakMenu = !state.streakMenu;
+    render();
+  },
+
+  async 'streak-stop'() {
+    try {
+      await api.streakStop();
+      toast('Просмотр остановлен', 'info');
+    } catch (error) {
+      toast('Стрики: ' + error.message, 'error');
+    }
+  },
+
+  async 'streak-toggle'() {
+    const enabled = !(state.snapshot.streak?.enabled);
+    applySnapshot({ ...state.snapshot, streak: { ...(state.snapshot.streak ?? {}), enabled } });
+    try {
+      await api.streakSave({ enabled });
+    } catch (error) {
+      toast('Стрики: ' + error.message, 'error');
+    }
+  },
+
+  async 'streak-relink'() {
+    try {
+      toast('Подтверди вход в браузере — профиль сохранится', 'info');
+      const snapshot = await api.loginWithDevice();
+      if (snapshot?.ready) applySnapshot(snapshot);
+      toast('Twitch переподключён', 'success');
+      const result = await api.streakRefresh();
+      if (result?.error) toast(result.error, 'error');
+    } catch (error) {
+      toast('Переподключение: ' + error.message, 'error');
+    }
+  },
+
+  async 'streak-refresh'() {
+    try {
+      const result = await api.streakRefresh();
+      if (result?.error) toast(result.error, 'error');
+      else toast('Подписки обновлены: ' + result.count, 'info');
+    } catch (error) {
+      toast('Стрики: ' + error.message, 'error');
+    }
+  },
+
+  async 'streak-watch'(target) {
+    try {
+      const minutes = target.dataset.minutes !== undefined ? Number(target.dataset.minutes) : undefined;
+      const result = await api.streakWatch(target.dataset.login, target.dataset.id, minutes);
+      if (result?.error) toast(result.error, 'error');
+      else {
+        state.streakMenu = false;
+        toast('Смотрю ' + target.dataset.login, 'info');
+      }
+    } catch (error) {
+      toast('Стрики: ' + error.message, 'error');
+    }
+  },
+
   async 'copy-summary'() {
     try {
       const result = await api.reportSummary();
@@ -1754,6 +2089,12 @@ document.addEventListener('submit', (event) => {
 
 document.addEventListener('change', (event) => {
   const target = event.target;
+  if (target.dataset.action === 'streak-limit') {
+    const value = Math.max(1, Math.min(20, Number(target.value) || 5));
+    if (state.snapshot.streak) state.snapshot.streak.dailyLimit = value;
+    api.streakSave({ dailyLimit: value }).catch(() => {});
+    return;
+  }
   const sliders = {
     'resume-slider': { key: 'resumeMinutes', min: 0, max: 60 },
     'refresh-slider': { key: 'refreshMinutes', min: 3, max: 60 },
@@ -1819,6 +2160,10 @@ document.addEventListener('input', (event) => {
 });
 
 document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && state.streakChannel) {
+    closeStreakSheet();
+    return;
+  }
   if (event.key === 'Escape' && state.sheetGame) {
     state.sheetGame = null;
     render();

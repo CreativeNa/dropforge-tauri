@@ -74,6 +74,36 @@ fn playback_token(agent: &ureq::Agent, login: &str, auth: &str) -> Result<(Strin
     Ok((value.to_string(), signature.to_string()))
 }
 
+fn stream_id(agent: &ureq::Agent, login: &str, token: &str) -> Option<String> {
+    let body = json!({
+        "query": "query($login:String!){ user(login:$login){ stream { id } } }",
+        "variables": { "login": login }
+    });
+    let mut request = agent
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", CLIENT_ID)
+        .header("Content-Type", "application/json");
+    if !token.is_empty() {
+        request = request.header("Authorization", &format!("OAuth {token}"));
+    }
+    let response: Value = request
+        .send(body.to_string())
+        .ok()?
+        .body_mut()
+        .read_json()
+        .ok()?;
+    response
+        .get("data")
+        .and_then(|data| data.get("user"))
+        .and_then(|user| user.get("stream"))
+        .and_then(|stream| stream.get("id"))
+        .map(|value| match value {
+            Value::String(text) => text.clone(),
+            other => other.to_string(),
+        })
+        .filter(|value| !value.is_empty() && value != "null")
+}
+
 fn http_lines(text: &str) -> Vec<String> {
     text.lines()
         .map(|line| line.trim())
@@ -159,30 +189,26 @@ fn watch_tick(
         }
     }
 
+    let broadcast_id = stream_id(agent, login, token).unwrap_or_default();
     let payload = json!([{
         "event": "minute-watched",
         "properties": {
             "channel_id": channel_id,
+            "broadcast_id": broadcast_id,
+            "player": "site",
             "channel": login,
             "client_time": chrono::Utc::now().to_rfc3339(),
-            "game": "",
-            "game_id": "",
-            "hidden": false,
-            "is_live": true,
             "live": true,
-            "logged_in": true,
-            "minutes_logged": 1,
-            "muted": false,
             "user_id": user_id
         }
     }]);
     let encoded = base64::engine::general_purpose::STANDARD.encode(payload.to_string());
     let spade_status = match agent
         .post(SPADE)
-        .header("Content-Type", "text/plain;charset=UTF-8")
+        .header("Content-Type", "application/x-www-form-urlencoded")
         .header("Origin", "https://www.twitch.tv")
         .header("Referer", &format!("https://www.twitch.tv/{login}"))
-        .send(json!({ "data": encoded }).to_string())
+        .send(format!("data={}", urlencode(&encoded)))
     {
         Ok(response) => response.status().as_u16(),
         Err(ureq::Error::StatusCode(code)) => code,
