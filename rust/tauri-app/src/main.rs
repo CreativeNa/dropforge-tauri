@@ -328,6 +328,28 @@ fn diagnostics_report(app: tauri::AppHandle) -> Value {
         }
     };
     lines.push(format!("pubsub: {pubsub_status}"));
+    let streak = streak_channels();
+    lines.push(format!("streak channels: {}", if streak.is_empty() { "нет".to_string() } else { streak.join(", ") }));
+    {
+        let mut store = STREAMS.lock().unwrap();
+        if store.is_empty() {
+            if let Some(items) = read_json(streams_path()).and_then(|value| value.as_array().cloned()) {
+                *store = items;
+            }
+        }
+        if store.is_empty() {
+            lines.push(String::from("streams: нет данных"));
+        } else {
+            for item in store.iter() {
+                lines.push(format!(
+                    "stream: {} — {} ({})",
+                    text_of(item.get("login")),
+                    if item.get("live").and_then(Value::as_bool).unwrap_or(false) { "в эфире" } else { "офлайн" },
+                    text_of(item.get("at"))
+                ));
+            }
+        }
+    }
     let progress = read_json(progress_path()).unwrap_or(Value::Null);
     lines.push(format!("progress.at: {}", text_of(progress.get("at"))));
     lines.push(format!("progress.drops: {}", progress.get("drops").and_then(Value::as_object).map(|map| map.len()).unwrap_or(0)));
@@ -1669,6 +1691,73 @@ fn channel_id_by_login(login: &str) -> Option<String> {
     }
 }
 
+/// Каналы, за которыми следит стрикосбиватель: логины из настроек.
+fn streak_channels() -> Vec<String> {
+    let mut channels: Vec<String> = Vec::new();
+    if let Some(items) = load_settings().get("streakChannels").and_then(Value::as_array) {
+        for item in items {
+            let login = text_of(Some(item)).trim().to_lowercase();
+            if !login.is_empty() && !channels.contains(&login) {
+                channels.push(login);
+            }
+        }
+    }
+    channels
+}
+
+fn streams_path() -> PathBuf {
+    profile_dir().join("streams.json")
+}
+
+fn save_streams(store: &[Value]) {
+    std::fs::create_dir_all(profile_dir()).ok();
+    if let Ok(text) = serde_json::to_string(store) {
+        let _ = std::fs::write(streams_path(), text);
+    }
+}
+
+/// Живое состояние каналов: логин, id, в эфире ли, когда обновлялось.
+/// Заполняется одним запросом на старте, дальше — только событиями PubSub.
+static STREAMS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+
+fn stream_by_id(channel_id: &str) -> Option<Value> {
+    STREAMS
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|item| text_of(item.get("channelId")) == channel_id)
+        .cloned()
+}
+
+/// Один раз проверяем, кто в эфире, чтобы не ждать первого stream-up.
+fn seed_streams() {
+    let channels = streak_channels();
+    if channels.is_empty() {
+        return;
+    }
+    let mut seeded: Vec<Value> = Vec::new();
+    for login in &channels {
+        let Some(id) = channel_id_by_login(login) else { continue };
+        let live = channel_is_live(login);
+        seeded.push(json!({
+            "login": login,
+            "channelId": id,
+            "live": live,
+            "at": chrono::Utc::now().to_rfc3339(),
+            "kind": if live { "stream-up" } else { "stream-down" },
+        }));
+    }
+    let mut store = STREAMS.lock().unwrap();
+    for item in seeded {
+        let id = text_of(item.get("channelId"));
+        match store.iter_mut().find(|entry| text_of(entry.get("channelId")) == id) {
+            Some(entry) => *entry = item,
+            None => store.push(item),
+        }
+    }
+    save_streams(&store);
+}
+
 /// Дропсы, доступные конкретному каналу (включая локальные кампании канала).
 fn available_drops(token: &str, channel_id: &str) -> Vec<Value> {
     let data = gql_value(
@@ -2190,11 +2279,18 @@ fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_i
         let _ = app.emit("log", json!({ "at": "", "level": "warn", "message": "pubsub-svc не найден" }));
         return;
     };
+    std::thread::spawn(seed_streams);
     let mut command = Command::new(&exe);
     command
         .args(["--stdin-token", "--user", &user_id, "--seconds", "86400", "--exit-on-stdin-close"])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped());
+    // по одному топику video-playback-by-id на каждый канал из стрик-списка
+    for login in streak_channels() {
+        if let Some(id) = channel_id_by_login(&login) {
+            command.args(["--stream", &id]);
+        }
+    }
     hide_console(&mut command);
     let Ok(mut child) = command.spawn() else {
         let _ = app.emit("log", json!({ "at": "", "level": "error", "message": "pubsub-svc не запустился" }));
@@ -2216,6 +2312,43 @@ fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_i
             match event.get("event").and_then(Value::as_str) {
                 Some("RESPONSE") => {
                     let _ = handle.emit("state", snapshot_from_profile());
+                }
+                Some("stream") => {
+                    let channel_id = text_of(event.get("channel"));
+                    let kind = text_of(event.get("kind"));
+                    let payload = text_of(event.get("payload"));
+                    // viewcount приходит каждые ~30 с, пока канал в эфире:
+                    // он подтверждает «live», но не является переходом состояния
+                    let transition = kind == "stream-up" || kind == "stream-down";
+                    let live = kind != "stream-down";
+                    let mut login = String::new();
+                    {
+                        let mut store = STREAMS.lock().unwrap();
+                        if let Some(entry) = store.iter_mut().find(|item| text_of(item.get("channelId")) == channel_id) {
+                            entry["live"] = json!(live);
+                            entry["at"] = json!(chrono::Utc::now().to_rfc3339());
+                            entry["kind"] = json!(kind);
+                            login = text_of(entry.get("login"));
+                        }
+                        save_streams(&store);
+                    }
+                    if !login.is_empty() && !transition {
+                        // просто обновляем состояние, без записи в журнал
+                    } else if !login.is_empty() {
+                        let message = if live {
+                            format!("Стрим начался: {login}")
+                        } else {
+                            format!("Стрим закончился: {login}")
+                        };
+                        let _ = handle.emit("log", json!({ "at": "", "level": "info", "message": message }));
+                        let _ = handle.emit("state", snapshot_from_profile());
+                    } else {
+                        let _ = handle.emit("log", json!({
+                            "at": "",
+                            "level": "info",
+                            "message": format!("PubSub stream {channel_id}: {kind} {}", &payload[..payload.len().min(120)])
+                        }));
+                    }
                 }
                 Some("message") => {
                     let topic = text_of(event.get("topic"));
@@ -2789,6 +2922,15 @@ fn set_auth_state(state: Value) {
 }
 
 fn snapshot_from_profile() -> Value {
+    let streams_value = {
+        let mut store = STREAMS.lock().unwrap();
+        if store.is_empty() {
+            if let Some(items) = read_json(streams_path()).and_then(|value| value.as_array().cloned()) {
+                *store = items;
+            }
+        }
+        store.clone()
+    };
     let profile = profile_dir();
     let cache = read_json(profile.join("catalog-cache.json")).unwrap_or(Value::Null);
     let auth = read_json(profile.join("auth.json")).unwrap_or(Value::Null);
@@ -3334,7 +3476,9 @@ fn snapshot_from_profile() -> Value {
             "dropsTab": settings.get("dropsTab").cloned().unwrap_or(json!("global")),
             "resumeMinutes": settings.get("resumeMinutes").cloned().unwrap_or(json!(15)),
             "autoBadges": settings.get("autoBadges").cloned().unwrap_or(json!(true)),
+            "streakChannels": settings.get("streakChannels").cloned().unwrap_or(json!([])),
         },
+        "streams": streams_value,
         "stats": {
             "games": games.len(),
             "campaigns": campaigns.len(),
@@ -3439,7 +3583,8 @@ fn load_settings() -> Value {
             "autoBadges": true,
             "refreshMinutes": 10,
             "priorityMode": "ending-soonest",
-            "resumeMinutes": 15
+            "resumeMinutes": 15,
+            "streakChannels": []
         })
     })
 }
