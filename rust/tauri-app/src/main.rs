@@ -1606,6 +1606,36 @@ fn auth_client_id() -> String {
     }
 }
 
+fn channel_is_live(login: &str) -> bool {
+    let Some(token) = load_token() else { return false };
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(10)))
+        .user_agent("Mozilla/5.0 DropForge/1.1")
+        .build()
+        .new_agent();
+    let url = format!(
+        "https://api.twitch.tv/helix/streams?user_login={}",
+        login.to_lowercase()
+    );
+    let Some(response) = agent
+        .get(&url)
+        .header("Client-Id", &auth_client_id())
+        .header("Authorization", &format!("Bearer {token}"))
+        .call()
+        .ok()
+    else {
+        return false;
+    };
+    let Some(value) = response.into_body().read_json::<Value>().ok() else {
+        return false;
+    };
+    value
+        .get("data")
+        .and_then(Value::as_array)
+        .map(|items| !items.is_empty())
+        .unwrap_or(false)
+}
+
 fn channel_id_by_login(login: &str) -> Option<String> {
     let token = load_token()?;
     let agent = ureq::Agent::config_builder()
@@ -2484,12 +2514,24 @@ fn advance_game(app: Option<tauri::AppHandle>) {
 }
 
 fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
+    start_miner_on(app, slug, None)
+}
+
+/// preferred — канал, который смотрели до перезапуска: если он ещё в эфире,
+/// возвращаемся на него, иначе берём любой живой канал кампании.
+fn start_miner_on(app: Option<tauri::AppHandle>, slug: &str, preferred: Option<&str>) -> Value {
     let token = load_token().unwrap_or_default();
     let Some(exe) = watcher_exe() else {
         return json!({ "error": "watcher-svc не найден рядом с приложением" });
     };
+    let preferred_channel = preferred
+        .filter(|login| !login.is_empty())
+        .filter(|login| channel_is_live(login))
+        .and_then(|login| channel_id_by_login(login).map(|id| (id, login.to_string())));
     // локальная кампания: смотрим сам канал, а не ищем его по категории
-    let channel = if let Some(local) = slug.strip_prefix("local:") {
+    let channel = if let Some(found) = preferred_channel {
+        Some(found)
+    } else if let Some(local) = slug.strip_prefix("local:") {
         let login = local.to_string();
         match channel_id_by_login(&login) {
             Some(id) => Some((id, login)),
@@ -4214,6 +4256,7 @@ fn main() {
                         .and_then(Value::as_u64)
                         .unwrap_or(15);
                     if window_minutes == 0 {
+                        push_log("info", "Автовозобновление выключено (окно 0 мин)".to_string());
                         save_farm_state(false, "", "");
                         return;
                     }
@@ -4231,6 +4274,7 @@ fn main() {
                                     text_of(campaign.get("game").and_then(|game| game.get("slug"))) == game
                                         && campaign
                                             .get("endsAt")
+                                            .or_else(|| campaign.get("endAt"))
                                             .and_then(Value::as_str)
                                             .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
                                             .map(|value| value.with_timezone(&chrono::Utc) > now)
@@ -4240,6 +4284,7 @@ fn main() {
                             .unwrap_or(false);
                     }
                     if !resume {
+                        push_log("info", "Автовозобновление: кампания уже не активна — фарм не возобновляю".to_string());
                         save_farm_state(false, "", "");
                         return;
                     }
@@ -4249,11 +4294,17 @@ fn main() {
                         games.insert(0, game.clone());
                     }
                     let first = games.first().cloned().unwrap_or(game);
+                    let channel = text_of(state.get("channel"));
                     *GAMES.lock().unwrap() = games;
                     *GAME_INDEX.lock().unwrap() = 0;
                     *STOPPING.lock().unwrap() = false;
-                    push_log("info", format!("Автовозобновление фарма: {first}"));
-                    let _ = start_miner(Some(handle.clone()), &first);
+                    let suffix = if channel.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (канал {channel})")
+                    };
+                    push_log("info", format!("Автовозобновление фарма: {first}{suffix}"));
+                    let _ = start_miner_on(Some(handle.clone()), &first, Some(channel.as_str()));
                     let _ = handle.emit("state", snapshot_from_profile());
                 });
             }
