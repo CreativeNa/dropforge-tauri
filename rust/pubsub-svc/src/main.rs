@@ -65,17 +65,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         watch_parent();
     }
     let user = value_of("--user").unwrap_or_default();
-    // id каналов, за которыми следим: --stream <channel_id> (можно несколько)
-    let mut stream_ids: Vec<String> = Vec::new();
-    for (index, arg) in args.iter().enumerate() {
-        if arg == "--stream" {
-            if let Some(value) = args.get(index + 1) {
-                if !value.is_empty() && !stream_ids.contains(value) {
-                    stream_ids.push(value.clone());
-                }
-            }
-        }
-    }
     let seconds: u64 = value_of("--seconds")
         .and_then(|value| value.parse().ok())
         .unwrap_or(20);
@@ -83,13 +72,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (socket, _) = connect_async(PUBSUB_URL).await?;
     let (mut sink, mut stream) = socket.split();
 
-    let mut topics: Vec<String> = Vec::new();
-    if !user.is_empty() {
-        topics.push(format!("user-drop-events.{user}"));
-    }
-    for id in &stream_ids {
-        topics.push(format!("video-playback-by-id.{id}"));
-    }
+    let topics = if user.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!("user-drop-events.{user}")]
+    };
 
     let nonce = format!("dropforge-{}", std::process::id());
     if !topics.is_empty() {
@@ -143,23 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .and_then(|data| data.get("message"))
                                     .and_then(Value::as_str)
                                     .unwrap_or("");
-                                // video-playback-by-id присылает JSON: stream-up / stream-down / viewcount
-                                if topic.starts_with("video-playback-by-id.") {
-                                    let kind = serde_json::from_str::<Value>(payload)
-                                        .ok()
-                                        .and_then(|value| value.get("type").cloned())
-                                        .and_then(|value| value.as_str().map(str::to_string))
-                                        .unwrap_or_default();
-                                    let channel = topic.trim_start_matches("video-playback-by-id.").to_string();
-                                    emit(&json!({
-                                        "event": "stream",
-                                        "channel": channel,
-                                        "kind": kind,
-                                        "payload": payload
-                                    }));
-                                } else {
-                                    emit(&json!({ "event": "message", "topic": topic, "payload": payload }));
-                                }
+                                emit(&json!({ "event": "message", "topic": topic, "payload": payload }));
                             }
                             _ => emit(&json!({ "event": kind, "topic": topic, "error": parsed.get("error") })),
                         }
