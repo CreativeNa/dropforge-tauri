@@ -3091,9 +3091,16 @@ fn snapshot_from_profile() -> Value {
     // один и тот же бейдж может выдаваться несколькими дропами — оставляем одну строку
     {
         let mut unique: Vec<Value> = Vec::new();
+        let key = |item: &Value| {
+            format!(
+                "{}|{}",
+                text_of(item.get("id")),
+                text_of(item.get("name"))
+            )
+        };
         for badge in badges {
-            let id = text_of(badge.get("id"));
-            match unique.iter_mut().find(|item| text_of(item.get("id")) == id) {
+            let id = key(&badge);
+            match unique.iter_mut().find(|item| key(item) == id) {
                 Some(existing) => {
                     if badge.get("claimed").and_then(Value::as_bool).unwrap_or(false) {
                         existing["claimed"] = json!(true);
