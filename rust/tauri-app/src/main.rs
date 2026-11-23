@@ -2930,6 +2930,7 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
 
     if let Some(stdout) = stdout {
         let handle = app.clone();
+        let login_for_thread = login.to_string();
         std::thread::spawn(move || {
             use std::io::BufRead;
             for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -2937,6 +2938,15 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
                 if event.get("event").and_then(Value::as_str) == Some("error") {
                     push_log("warn", format!("Стрик watcher: {}", text_of(event.get("message"))));
                 }
+            }
+            // вотчер завершился сам: стрим закончился или упал
+            let active = STREAK_ACTIVE.lock().unwrap().clone();
+            if text_of(active.get("login")) == login_for_thread && !active.is_null() {
+                *STREAK_ACTIVE.lock().unwrap() = Value::Null;
+                STREAK_CHILD.lock().unwrap().take();
+                let points_before = active.get("pointsBefore").and_then(Value::as_u64);
+                push_log("info", format!("Стрик: {login_for_thread} завершился, закрываю сессию"));
+                finish_streak_session(&login_for_thread, points_before, handle);
             }
         });
     }
@@ -4688,7 +4698,6 @@ fn drops_claim_all(app: tauri::AppHandle) -> Value {
 
 #[tauri::command]
 fn farm_start(app: tauri::AppHandle) -> Value {
-    stop_streak();
     let settings = read_json(profile_dir().join("settings.json")).unwrap_or(Value::Null);
     let games: Vec<String> = settings
         .get("games")
@@ -4715,6 +4724,9 @@ fn farm_start(app: tauri::AppHandle) -> Value {
     let result = start_miner(Some(app.clone()), &slug);
     if let Some(error) = result.get("error") {
         push_log("warn", format!("Автофарм не запущен: {error}"));
+    } else if !STREAK_ACTIVE.lock().unwrap().is_null() {
+        push_log("info", "Стрик остановлен: запущен фарм дропов".to_string());
+        stop_streak();
     }
     let snapshot = snapshot_from_profile();
     let _ = app.emit("state", snapshot.clone());
