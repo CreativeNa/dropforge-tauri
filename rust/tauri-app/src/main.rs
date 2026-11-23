@@ -258,6 +258,43 @@ fn reg_value(_path: &str, _name: &str) -> Option<String> {
     None
 }
 
+fn windows_version_string() -> String {
+    let key = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+    let product = reg_value(key, "ProductName").unwrap_or_default();
+    let display = reg_value(key, "DisplayVersion").unwrap_or_default();
+    let build_text = reg_value(key, "CurrentBuildNumber")
+        .or_else(|| reg_value(key, "CurrentBuild"))
+        .unwrap_or_default();
+    let build: u32 = build_text.parse().unwrap_or(0);
+    let ubr = reg_value(key, "UBR").unwrap_or_default();
+    // на Windows 11 в реестре до сих пор лежит ProductName = "Windows 10 ..."
+    let name = if build >= 22000 {
+        if product.is_empty() {
+            "Windows 11".to_string()
+        } else {
+            product.replace("Windows 10", "Windows 11")
+        }
+    } else if product.is_empty() {
+        "Windows 10".to_string()
+    } else {
+        product
+    };
+    let mut result = name;
+    if !display.is_empty() {
+        result.push(' ');
+        result.push_str(&display);
+    }
+    if build > 0 {
+        result.push_str(&format!(" (build {build}"));
+        if !ubr.is_empty() {
+            result.push('.');
+            result.push_str(&ubr);
+        }
+        result.push(')');
+    }
+    result
+}
+
 fn webview2_version() -> String {
     reg_value("SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}", "pv")
         .or_else(|| reg_value("SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}", "pv"))
@@ -287,10 +324,7 @@ fn diagnostics_report(app: tauri::AppHandle) -> Value {
     lines.push(format!("DropForge diagnostics"));
     lines.push(format!("version: {APP_VERSION}"));
     lines.push(format!("os: {} {}", std::env::consts::OS, std::env::consts::ARCH));
-    lines.push(format!("windows: {} {} (build {})",
-        reg_value("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "ProductName").unwrap_or_default(),
-        reg_value("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "DisplayVersion").unwrap_or_default(),
-        reg_value("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", "CurrentBuild").unwrap_or_default()));
+    lines.push(format!("windows: {}", windows_version_string()));
     lines.push(format!("webview2: {}", webview2_version()));
     lines.push(format!("exe: {}", mask_text(&std::env::current_exe().map(|path| path.display().to_string()).unwrap_or_default())));
     lines.push(format!("data: {}", mask_text(&profile.display().to_string())));
