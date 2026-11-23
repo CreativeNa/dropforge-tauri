@@ -2979,6 +2979,7 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
             "--user", &user_id,
             "--minutes", &watch_minutes.to_string(),
             "--interval", "30",
+            "--points-only",
             "--stdin-token",
             "--exit-on-stdin-close",
         ])
@@ -3034,10 +3035,13 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
                 match event.get("event").and_then(Value::as_str) {
                     Some("error") => log_warn(format!("Стрик watcher: {}", text_of(event.get("message")))),
                     Some("tick") => log_info(format!(
-                        "Стрик watcher tick: сегментов {}, spade {}, прогресс {}",
+                        "Стрик watcher tick: сегментов {}, spade {}{}",
                         text_of(event.get("chunksOk")),
                         text_of(event.get("spadeStatus")),
-                        event.get("progress").map(|value| value.to_string()).unwrap_or_default()
+                        match event.get("progress") {
+                            Some(value) if !value.is_null() => format!(", прогресс {value}"),
+                            _ => String::new(),
+                        }
                     )),
                     _ => {}
                 }

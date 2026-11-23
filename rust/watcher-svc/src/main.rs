@@ -151,6 +151,7 @@ fn watch_tick(
     user_id: &str,
     channel_id: &str,
     token: &str,
+    points_only: bool,
 ) -> Result<Value, String> {
     let (playback, signature) = playback_token(agent, login, token)?;
     let url = format!(
@@ -215,13 +216,17 @@ fn watch_tick(
         Err(_) => 0,
     };
 
-    let progress = current_drop(agent, channel_id, &token).map(|session| {
+    let progress = if points_only {
+        None
+    } else {
+        current_drop(agent, channel_id, &token).map(|session| {
         json!({
             "dropID": session.get("dropID"),
             "currentMinutesWatched": session.get("currentMinutesWatched"),
             "game": session.get("game").and_then(|game| game.get("displayName")),
         })
-    });
+    })
+    };
 
     Ok(json!({
         "event": "tick",
@@ -284,6 +289,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let channel_id = value_of("--channel-id").unwrap_or_default();
+    let points_only = args.iter().any(|arg| arg == "--points-only");
     // сторож stdin запускаем только после чтения токена, иначе он съест первую строку
     if exit_on_close {
         watch_parent();
@@ -295,7 +301,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut errors = 0u32;
 
     while Instant::now() < deadline {
-        match watch_tick(&agent, &login, &user_id, &channel_id, &token) {
+        match watch_tick(&agent, &login, &user_id, &channel_id, &token, points_only) {
             Ok(event) => {
                 ticks += 1;
                 errors = 0;
