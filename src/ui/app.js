@@ -1213,7 +1213,15 @@ function streakSheet() {
       return before > 0 && after > 0 ? after - before : null;
     })
     .filter((value) => value !== null && Number.isFinite(value));
-  const totalMinutes = sessions.reduce((sum, session) => sum + (Number(session.minutes) || 0), 0);
+  const sessionMinutes = (session) => {
+    const startedAt = new Date(session.startedAt).getTime();
+    const endedAt = session.endedAt ? new Date(session.endedAt).getTime() : Date.now();
+    if (Number.isFinite(startedAt) && Number.isFinite(endedAt) && endedAt > startedAt) {
+      return Math.max(1, Math.round((endedAt - startedAt) / 60000));
+    }
+    return Number(session.minutes) || 0;
+  };
+  const totalMinutes = sessions.reduce((sum, session) => sum + sessionMinutes(session), 0);
   const totalPoints = deltas.reduce((sum, value) => sum + value, 0);
   const best = deltas.length ? Math.max(...deltas) : null;
   const gainedCount = sessions.filter((session) => session.gained).length;

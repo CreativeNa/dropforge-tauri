@@ -3115,9 +3115,27 @@ button {
 
 .streak-sheet-list {
   overflow-y: auto;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
   border: 1px solid var(--line-soft);
   border-radius: 12px;
   background: var(--panel);
+}
+
+.streak-sheet-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.streak-sheet-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.streak-sheet-list::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
 }
 
 .streak-sheet-row {
@@ -3219,4 +3237,8 @@ button {
     transition: none;
     animation: none;
   }
+}
+
+body:has(.streak-sheet) .content {
+  overflow-y: hidden;
 }

@@ -2579,7 +2579,6 @@ fn finish_streak_session(login: &str, points_before: Option<u64>, app: Option<ta
     let mut data = load_streaks();
     streak_reset_day(&mut data);
     let mut gained = false;
-    finish_session_record(login, points_after, delta.map(|value| value > 449).unwrap_or(false));
     if let Some(items) = data["channels"].as_array_mut() {
         for item in items {
             if text_of(item.get("login")) != login {
@@ -2602,6 +2601,7 @@ fn finish_streak_session(login: &str, points_before: Option<u64>, app: Option<ta
         }
     }
     save_streaks(&data);
+    finish_session_record(login, points_after, delta.map(|value| value > 449).unwrap_or(false));
     push_log(
         "info",
         format!(
