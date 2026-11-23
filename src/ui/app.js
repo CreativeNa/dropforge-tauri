@@ -875,11 +875,6 @@ function gameCard(game, { hidden = false } = {}) {
   <div class="game-card ${game.selected ? 'selected' : ''}" data-action="open-game" data-slug="${esc(game.slug)}" data-name="${esc(game.name.toLowerCase())}" role="button" tabindex="0" ${hidden ? 'hidden' : ''}>
     <div class="game-art">
       ${art ? `<img src="${esc(art)}" alt="" loading="lazy" data-fallback />` : ''}
-      <div class="game-badges">
-        ${game.rewardOnly ? '<span class="badge">награда</span>' : game.canEarn ? '<span class="badge live"><i></i>drops</span>' : '<span class="badge">пауза</span>'}
-        ${game.channel ? `<span class="badge">канал: ${esc(game.channel)}</span>` : ''}
-        ${game.farming ? '<span class="badge farm">фарм</span>' : ''}
-      </div>
     </div>
     <div class="game-info">
       <div class="game-title" title="${esc(game.name)}">${esc(game.name)}</div>
