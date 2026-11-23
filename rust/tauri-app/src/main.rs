@@ -3281,6 +3281,17 @@ fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_i
                             let _ = handle.emit("state", snapshot_from_profile());
                         } else if kind == "stream-down" {
                             streak_mark_live(channel_id, false);
+                            let login = load_streaks()
+                                .get("channels")
+                                .and_then(Value::as_array)
+                                .and_then(|items| items.iter().find(|item| text_of(item.get("id")) == channel_id))
+                                .map(|item| text_of(item.get("login")))
+                                .unwrap_or_default();
+                            let active = STREAK_ACTIVE.lock().unwrap().clone();
+                            if !login.is_empty() && text_of(active.get("login")) == login && !active.is_null() {
+                                log_info(format!("Стрик: {login} закончил эфир — останавливаю просмотр"));
+                                stop_streak();
+                            }
                             let _ = handle.emit("state", snapshot_from_profile());
                         }
                     }

@@ -292,15 +292,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = agent();
     let deadline = Instant::now() + Duration::from_secs(minutes * 60);
     let mut ticks = 0u32;
+    let mut errors = 0u32;
 
     while Instant::now() < deadline {
         match watch_tick(&agent, &login, &user_id, &channel_id, &token) {
             Ok(event) => {
                 ticks += 1;
+                errors = 0;
                 emit(&event);
             }
             Err(message) => {
+                errors += 1;
                 emit(&json!({ "event": "error", "message": message }));
+                if errors >= 4 {
+                    emit(&json!({ "event": "stop", "reason": "stream-errors", "ticks": ticks }));
+                    break;
+                }
             }
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
