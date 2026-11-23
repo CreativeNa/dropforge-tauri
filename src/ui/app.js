@@ -1027,11 +1027,6 @@ function badgeRow(badge) {
       : minutes > 0
         ? `${minutes} мин просмотра`
         : 'Приобретите подписку первого уровня или подарочную подписку первого уровня';
-  if (badge.evolution) {
-    condition += badge.evolutionReady
-      ? ' · эволюция готова'
-      : ` · нужен ${badge.evolutionRequires}`;
-  }
   const title = badge.game ? `${badge.name} — ${badge.game}` : badge.name;
   const art = badge.imageUrl;
   const status = badge.claimed
