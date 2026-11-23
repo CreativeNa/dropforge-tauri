@@ -582,10 +582,23 @@ fn diagnostics_open() -> Value {
     if !path.exists() {
         return json!({ "ok": false, "error": "отчёт ещё не собран" });
     }
-    let mut explore = Command::new("explorer");
-    explore.arg(format!("/select,\"{}\"", path.display()));
-    hide_console(&mut explore);
-    let _ = explore.spawn();
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let operation: Vec<u16> = "open\0".encode_utf16().collect();
+        let target: Vec<u16> = format!("{}\0", path.display()).encode_utf16().collect();
+        unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            );
+        }
+    }
     if let Ok(content) = std::fs::read_to_string(&path) {
         let _ = clipboard_copy(&content);
     }

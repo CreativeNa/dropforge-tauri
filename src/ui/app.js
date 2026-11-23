@@ -1503,7 +1503,6 @@ function settingsView() {
           <div class="row-hint">Соберёт версии, состояние сервисов, доступность Twitch и журнал. Без логина, токена и путей с именем пользователя<br>Файл: <code>data/profile/diagnostics/latest.txt</code></div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn-ghost" data-action="diagnostics-open">Открыть отчёт</button>
           <button class="btn-ghost" data-action="diagnostics">Собрать отчёт</button>
           <button class="btn-ghost" data-action="copy-logs">Скопировать журнал</button>
           <button class="btn-ghost" data-action="logs-open">Открыть файл журнала</button>
@@ -1888,7 +1887,7 @@ const actions = {
       const report = await api.diagnostics();
       state.diagnostics = report;
       const opened = await api.diagnosticsOpen();
-      toast(opened?.ok ? 'Отчёт открыт в проводнике и скопирован в буфер' : 'Отчёт сохранён: ' + (report?.path ?? 'data/profile/diagnostics/latest.txt'));
+      toast(opened?.ok ? 'Отчёт собран, открыт и скопирован в буфер' : 'Отчёт сохранён: ' + (report?.path ?? 'data/profile/diagnostics/latest.txt'));
     } catch (error) {
       toast('Диагностика: ' + error.message, 'error');
     } finally {
