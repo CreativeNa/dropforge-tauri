@@ -87,6 +87,8 @@ const state = {
   diagnostics: null,
   scrollTop: 0,
   appVersion: null,
+  buildFingerprint: null,
+  buildDate: null,
 };
 
 /* ----------------------------------------------------------------- helpers */
@@ -354,6 +356,18 @@ function deviceOverlay() {
         <button class="btn-primary" data-action="open-activation">Открыть страницу Twitch</button>
         <button class="btn-ghost" data-action="cancel-device">Отмена</button>
       </div>
+    </div>
+  </div>`;
+}
+
+function settingsErrorBanner() {
+  const path = state.snapshot?.settingsError;
+  if (!path) return '';
+  return `
+  <div class="legacy-banner" style="border-color:rgba(242,118,111,.35);background:rgba(242,118,111,.08)">
+    <div class="legacy-banner-text">
+      <b>Файл настроек повреждён.</b>
+      <span>Приложение запустилось со значениями по умолчанию. Копия старого файла: <code>${esc(path)}</code></span>
     </div>
   </div>`;
 }
@@ -818,7 +832,7 @@ function dropsView() {
     <button class="tab ${state.dropsTab === 'global' ? 'active' : ''}" data-action="drops-tab" data-tab="global" role="tab">
       Глобальные <span class="tab-count">${globalCount}</span>
     </button>
-    <button class="tab ${state.dropsTab === 'local' ? 'active' : ''}" data-action="drops-tab" data-tab="local" role="tab">
+    <button class="tab ${state.dropsTab === 'local' ? 'active' : ''}" data-action="drops-tab" data-tab="local" role="tab" title="Раздел в разработке" aria-disabled="true">
       Локальные <span class="tab-count">${localCount}</span>
     </button>
   </div>
@@ -1160,7 +1174,7 @@ function logsView() {
     .map(
       (entry) => `
     <div class="log-line ${esc(entry.level)}">
-      <span class="log-time">${new Date(entry.at).toLocaleTimeString('ru-RU')}</span>
+      <span class="log-time">${(() => { const date = new Date(entry.at); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleTimeString('ru-RU'); })()}</span>
       <span class="log-msg">${esc(entry.message)}</span>
     </div>`,
     )
@@ -1253,7 +1267,7 @@ function streakSheet() {
         <div class="streak-sheet-points">
           <span>${hasBefore ? before.toLocaleString('ru-RU') : '—'}</span>
           <span class="arrow">→</span>
-          <span>${hasAfter ? after.toLocaleString('ru-RU') : '—'}</span>
+          <span>${hasAfter ? after.toLocaleString('ru-RU') : 'нет данных'}</span>
           ${delta !== null ? `<b class="${delta > 449 ? 'gain' : delta > 0 ? 'plus' : ''}">${delta > 0 ? '+' : ''}${delta}</b>` : ''}
         </div>
         <div class="streak-sheet-dur">${session.unlimited ? '∞' : shortMinutes(minutes) + ' мин'}${Number(session.chestsClaimed) > 0 ? ' · +' + session.chestsClaimed : ''}</div>
@@ -1350,7 +1364,7 @@ function streaksView() {
           <div class="streak-name">${esc(channel.login)}${channel.live ? '<span class="streak-dot"></span>' : ''}</div>
           <div class="streak-status">${status}${channel.watchedToday && channel.live ? ' · отмечен' : ''}</div>
         </div>
-        <div class="streak-days${streakValue ? '' : ' no-value'}">
+        <div class="streak-days${streakValue ? '' : ' no-value'}" ${streakValue ? '' : 'title="Активной серии нет"'}>
           <b>${streakValue ?? '—'}</b>
           <span>серия</span>
         </div>
@@ -1536,6 +1550,13 @@ function settingsView() {
         <div class="row-label muted">Версия</div>
         <div class="mono muted" id="app-version">${esc(state.appVersion ?? '—')}</div>
       </div>
+      <div class="row">
+        <div class="row-label muted">Сборка</div>
+        <div class="mono muted" style="text-align:right">
+          ${esc(state.buildFingerprint ?? '—')}
+          ${state.buildDate ? '<br><span style="font-size:10px">' + esc(new Date(state.buildDate).toLocaleString('ru-RU')) + '</span>' : ''}
+        </div>
+      </div>
     </div>
   </div>`;
 }
@@ -1640,6 +1661,7 @@ function render() {
       ${sidebar()}
       <main class="main">
         ${topbar()}
+        ${settingsErrorBanner()}
         ${legacyBanner()}
         <div class="content" id="content">${content}</div>
       </main>
@@ -2285,6 +2307,8 @@ async function boot() {
       .version()
       .then((info) => {
         state.appVersion = info?.app ?? null;
+        state.buildFingerprint = info?.build ?? null;
+        state.buildDate = info?.builtAt ?? null;
         if (state.view === 'settings') render();
       })
       .catch(() => {});

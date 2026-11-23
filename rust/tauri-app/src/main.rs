@@ -651,9 +651,11 @@ fn update_check() -> Value {
     let response = match agent.get(&url).header("Accept", "application/vnd.github+json").call() {
         Ok(response) => response,
         Err(ureq::Error::StatusCode(code)) => {
+            log_warn(format!("Обновление: GitHub ответил {code}"));
             return json!({ "current": APP_VERSION, "available": false, "error": format!("GitHub ответил {code}") });
         }
         Err(error) => {
+            log_warn(format!("Обновление: нет связи ({error})"));
             return json!({ "current": APP_VERSION, "available": false, "error": format!("нет связи: {error}") });
         }
     };
@@ -678,10 +680,15 @@ fn update_check() -> Value {
             break;
         }
     }
+    let available = !latest.is_empty() && version_greater(&latest, APP_VERSION);
+    log_info(format!(
+        "Обновление: текущая {}, последняя {}, доступно {}",
+        APP_VERSION, latest, available
+    ));
     json!({
         "current": APP_VERSION,
         "latest": latest,
-        "available": !latest.is_empty() && version_greater(&latest, APP_VERSION),
+        "available": available,
         "notes": release.get("body").cloned().unwrap_or(Value::Null),
         "publishedAt": release.get("published_at").cloned().unwrap_or(Value::Null),
         "assetUrl": asset_url,
@@ -1993,6 +2000,7 @@ static STREAK_DATA: Mutex<()> = Mutex::new(());
 static LAST_DURATION_SECS: Mutex<u64> = Mutex::new(0);
 static STATUS: Mutex<Value> = Mutex::new(Value::Null);
 static LOGS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
+static SETTINGS_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static DEVICE: Mutex<Value> = Mutex::new(Value::Null);
 static AUTH_CACHE: Mutex<Option<Value>> = Mutex::new(None);
 
@@ -3243,6 +3251,7 @@ fn streak_watch(app: tauri::AppHandle, login: String, channel_id: String, minute
 
 fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_id: String) {
     let Some(exe) = pubsub_exe() else {
+        log_error("pubsub-svc не найден рядом с приложением");
         let _ = app.emit("log", json!({ "at": "", "level": "warn", "message": "pubsub-svc не найден" }));
         return;
     };
@@ -3250,9 +3259,11 @@ fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_i
     command
         .args(["--stdin-token", "--user", &user_id, "--seconds", "86400", "--exit-on-stdin-close", "--topics", &streak_topics()])
         .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped());
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     hide_console(&mut command);
     let Ok(mut child) = command.spawn() else {
+        log_error("pubsub-svc не запустился");
         let _ = app.emit("log", json!({ "at": "", "level": "error", "message": "pubsub-svc не запустился" }));
         return;
     };
@@ -3261,6 +3272,16 @@ fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_i
         let _ = writeln!(stdin, "{token}");
     }
     let stdout = child.stdout.take();
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stderr).lines().map_while(Result::ok) {
+                if !line.trim().is_empty() {
+                    log_warn(format!("pubsub-svc: {line}"));
+                }
+            }
+        });
+    }
     *state.pubsub.lock().unwrap() = Some(child);
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -4441,6 +4462,7 @@ fn snapshot_from_profile() -> Value {
             "tokenPreview": Value::Null,
         },
         "status": status_value(),
+        "settingsError": SETTINGS_ERROR.lock().unwrap().clone(),
         "pubsub": "offline",
         "streak": streak_view(),
         "lastRefresh": cache.get("at"),
@@ -4551,8 +4573,26 @@ fn settings_path() -> PathBuf {
 }
 
 fn load_settings() -> Value {
-    read_json(settings_path()).unwrap_or_else(|| {
-        json!({
+    let path = settings_path();
+    if let Ok(text) = std::fs::read_to_string(&path) {
+        match serde_json::from_str::<Value>(&text) {
+            Ok(value) if value.is_object() => return value,
+            Ok(_) => {}
+            Err(error) => {
+                let backup = profile_dir().join(format!(
+                    "settings.corrupt-{}.json",
+                    chrono::Local::now().format("%Y%m%d-%H%M%S")
+                ));
+                let _ = std::fs::copy(&path, &backup);
+                *SETTINGS_ERROR.lock().unwrap() = Some(backup.display().to_string());
+                log_error(format!(
+                    "Настройки: файл повреждён ({error}), копия сохранена в {}",
+                    backup.display()
+                ));
+            }
+        }
+    }
+    json!({
             "games": [],
             "pinned": [],
             "localChannels": [],
@@ -4573,7 +4613,6 @@ fn load_settings() -> Value {
                 "claimChests": true
             }
         })
-    })
 }
 
 fn save_settings(value: &Value) -> Result<(), String> {
@@ -5120,9 +5159,25 @@ fn app_snapshot(since: Option<String>) -> Value {
     snapshot_for_ui(since)
 }
 
+fn exe_fingerprint() -> (String, String) {
+    let path = std::env::current_exe().unwrap_or_default();
+    let hash = std::fs::read(&path)
+        .ok()
+        .map(|bytes| sha256_hex(&bytes))
+        .map(|hash| hash.chars().take(12).collect::<String>())
+        .unwrap_or_default();
+    let built = std::fs::metadata(&path)
+        .ok()
+        .and_then(|meta| meta.modified().ok())
+        .map(|time| chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339())
+        .unwrap_or_default();
+    (hash, built)
+}
+
 #[tauri::command]
 fn app_version() -> Value {
-    json!({ "app": env!("CARGO_PKG_VERSION"), "electron": null })
+    let (build, built_at) = exe_fingerprint();
+    json!({ "app": env!("CARGO_PKG_VERSION"), "electron": null, "build": build, "builtAt": built_at })
 }
 
 #[tauri::command]
