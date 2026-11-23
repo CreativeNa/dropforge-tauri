@@ -105,14 +105,25 @@
     }
     return snapshot;
   };
+  // события бэкенда: без них спиннер «Обновить» не узнаёт, что загрузка идёт
+  const tauriEvent = tauri.event;
+  if (tauriEvent?.listen) {
+    for (const channel of ['log', 'status', 'refresh', 'device-code', 'auth', 'auth-error', 'auth-cancelled', 'progress', 'pubsub']) {
+      tauriEvent.listen(channel, (event) => emit(channel, event?.payload ?? event)).catch(() => {});
+    }
+  }
+
   let timer = null;
   const pull = async () => {
     try {
       const info = await invoke("app_snapshot_stamp");
       const stamp = info?.stamp ?? "";
-      if (stamp && stamp !== lastStamp) {
+      // пока каталог не пришёл ни разу, запрашиваем полный снимок: иначе бэкенд
+      // решит, что клиент уже знает кампании, и пришлёт только дельту прогресса
+      const needFull = cachedCampaigns.length === 0;
+      if (stamp && (stamp !== lastStamp || needFull)) {
         lastStamp = stamp;
-        const snapshot = applyDelta(await invoke("app_snapshot", { since: lastStamp }));
+        const snapshot = applyDelta(await invoke("app_snapshot", needFull ? {} : { since: lastStamp }));
         emit("state", snapshot);
       }
     } catch {

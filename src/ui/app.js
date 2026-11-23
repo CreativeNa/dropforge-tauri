@@ -152,6 +152,38 @@ function toast(message, kind = 'info') {
   setTimeout(() => node.remove(), 5200);
 }
 
+let autoRefreshRunning = false;
+let refreshStartedAt = 0;
+
+/**
+ * Первый чистый запуск или вход: каталога ещё нет — тянем его сами и держим
+ * спиннер, пока бэкенд не пришлёт refresh.active = false.
+ */
+function maybeAutoRefresh() {
+  if (autoRefreshRunning) return;
+  if (!state.snapshot?.auth?.loggedIn) return;
+  if ((state.snapshot.stats?.campaigns ?? 0) > 0) return;
+  autoRefreshRunning = true;
+  refreshStartedAt = Date.now();
+  setBusy('refresh', true);
+  render();
+  api
+    .refresh()
+    .then((snapshot) => {
+      if (snapshot) applySnapshot(snapshot);
+    })
+    .catch(() => {})
+    .finally(() => {
+      autoRefreshRunning = false;
+    });
+  // страховка: если событие refresh.active=false не придёт, спиннер не зависнет
+  setTimeout(() => {
+    if (!state.snapshot?.auth?.loggedIn) return;
+    setBusy('refresh', false);
+    if (state.view === 'drops') render();
+  }, 20000);
+}
+
 function setBusy(key, value) {
   if (value) state.busy.add(key);
   else state.busy.delete(key);
@@ -1337,6 +1369,7 @@ function applySnapshot(snapshot) {
     pendingSheetGame = null;
   }
   render();
+  maybeAutoRefresh();
 }
 
 const actions = {
@@ -1849,16 +1882,7 @@ async function boot() {
       };
     }
     render();
-
-    // Первый запуск: вход есть, а кэш кампаний пуст — подтягиваем список сами.
-    if (state.snapshot?.auth?.loggedIn && !state.snapshot?.stats?.campaigns) {
-      api
-        .refresh()
-        .then((snapshot) => {
-          if (snapshot) applySnapshot(snapshot);
-        })
-        .catch(() => {});
-    }
+    maybeAutoRefresh();
   } catch (error) {
     toast(`Ошибка запуска: ${error.message}`, 'error');
     state.snapshot = demoSnapshot();
@@ -1885,8 +1909,17 @@ async function boot() {
           }
           break;
         case 'refresh':
-          setBusy('refresh', Boolean(payload.active));
-          if (state.view === 'drops') render();
+          if (payload.active) {
+            refreshStartedAt = Date.now();
+            setBusy('refresh', true);
+            if (state.view === 'drops') render();
+          } else {
+            const left = 900 - (Date.now() - refreshStartedAt);
+            setTimeout(() => {
+              setBusy('refresh', false);
+              if (state.view === 'drops') render();
+            }, Math.max(0, left));
+          }
           break;
         case 'auth':
           if (state.snapshot) state.snapshot.auth = payload;
