@@ -3045,8 +3045,6 @@ fn snapshot_from_profile() -> Value {
                 let paid = subs > 0.0 || minutes <= 0.0;
                 let note = if subs > 0.0 {
                     "нужна подписка: оформляется на Twitch"
-                } else if minutes <= 0.0 {
-                    "награда за подписку или покупку"
                 } else if campaign_has_paid {
                     "финальная награда кампании: нужны все награды, включая платные"
                 } else {
@@ -3094,6 +3092,26 @@ fn snapshot_from_profile() -> Value {
             }
         }
     }
+    // один и тот же бейдж может выдаваться несколькими дропами — оставляем одну строку
+    {
+        let mut unique: Vec<Value> = Vec::new();
+        for badge in badges {
+            let id = text_of(badge.get("id"));
+            match unique.iter_mut().find(|item| text_of(item.get("id")) == id) {
+                Some(existing) => {
+                    if badge.get("claimed").and_then(Value::as_bool).unwrap_or(false) {
+                        existing["claimed"] = json!(true);
+                    }
+                    if badge.get("available").and_then(Value::as_bool).unwrap_or(false) {
+                        existing["available"] = json!(true);
+                    }
+                }
+                None => unique.push(badge),
+            }
+        }
+        badges = unique;
+    }
+
     // коллекции наградных кампаний: сундуки за просмотр и подписки
     let earned_list = progress.get("earnedRewards").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut collections: Vec<Value> = Vec::new();

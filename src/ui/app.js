@@ -466,7 +466,6 @@ function liveProgress() {
         : ''
     }
 
-    ${collection ? '' : next ? `<div class="live-next">Далее: ${esc(next.name)} · ${next.requiredMinutes} мин</div>` : ''}
   </div>`;
 }
 
@@ -1027,7 +1026,7 @@ function badgeRow(badge) {
       ? `${subs} ${subsWord(subs)}`
       : minutes > 0
         ? `${minutes} мин просмотра`
-        : 'за покупку или подписку';
+        : 'Приобретите подписку первого уровня или подарочную подписку первого уровня';
   const art = badge.imageUrl;
   const status = badge.claimed
     ? '<span class="drop-status done">получен</span>'
