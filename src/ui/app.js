@@ -1538,6 +1538,51 @@ function legacyBanner() {
     </div>`;
 }
 
+function morphChildren(fromParent, toParent) {
+  const fromNodes = Array.from(fromParent.childNodes);
+  const toNodes = Array.from(toParent.childNodes);
+  const count = Math.max(fromNodes.length, toNodes.length);
+  for (let index = 0; index < count; index += 1) {
+    const from = fromNodes[index];
+    const to = toNodes[index];
+    if (!to) {
+      if (from) from.remove();
+      continue;
+    }
+    if (!from) {
+      fromParent.appendChild(to.cloneNode(true));
+      continue;
+    }
+    morphNode(from, to);
+  }
+}
+
+function morphNode(from, to) {
+  if (from.nodeType !== to.nodeType) {
+    from.replaceWith(to.cloneNode(true));
+    return;
+  }
+  if (from.nodeType === 3) {
+    if (from.nodeValue !== to.nodeValue) from.nodeValue = to.nodeValue;
+    return;
+  }
+  if (from.nodeType !== 1) return;
+  if (from.tagName !== to.tagName) {
+    from.replaceWith(to.cloneNode(true));
+    return;
+  }
+  const focus = document.activeElement;
+  const isFormField = from.tagName === 'INPUT' || from.tagName === 'TEXTAREA';
+  for (const attr of Array.from(from.attributes)) {
+    if (!to.hasAttribute(attr.name)) from.removeAttribute(attr.name);
+  }
+  for (const attr of Array.from(to.attributes)) {
+    if (isFormField && focus === from && (attr.name === 'value' || attr.name === 'checked')) continue;
+    if (from.getAttribute(attr.name) !== attr.value) from.setAttribute(attr.name, attr.value);
+  }
+  morphChildren(from, to);
+}
+
 function render() {
   const root = document.getElementById('root');
   if (!root) return;
@@ -1551,7 +1596,10 @@ function render() {
   const sheetScroll = document.querySelector('.sheet-body')?.scrollTop ?? 0;
 
   if (!state.snapshot) {
-    root.innerHTML = `<div class="auth-screen"><div class="auth-left"><div class="auth-brand"><div class="brand-mark">${ICONS.logo}</div><span class="brand-name">DropForge</span></div><p class="auth-lead">Загрузка…</p></div></div>`;
+    const html = `<div class="auth-screen"><div class="auth-left"><div class="auth-brand"><div class="brand-mark">${ICONS.logo}</div><span class="brand-name">DropForge</span></div><p class="auth-lead">Загрузка…</p></div></div>`;
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  morphChildren(root, template.content);
     return;
   }
 
@@ -1570,7 +1618,7 @@ function render() {
           : settingsView();
 
   const streakListScroll = document.querySelector('.streak-sheet-list')?.scrollTop ?? 0;
-  root.innerHTML = `
+  const html = `
     <div class="app">
       ${sidebar()}
       <main class="main">
@@ -1582,6 +1630,9 @@ function render() {
     ${state.sheetGame ? sheet() : ''}
     ${state.streakChannel ? streakSheet() : ''}
     ${state.device && state.snapshot.auth?.loggedIn ? deviceOverlay() : ''}`;
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  morphChildren(root, template.content);
 
   const contentEl = document.getElementById('content');
   if (contentEl) contentEl.scrollTop = state.scrollTop;
