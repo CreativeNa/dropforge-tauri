@@ -58,7 +58,14 @@ fn read_json(path: PathBuf) -> Option<Value> {
 }
 
 fn text_of(value: Option<&Value>) -> String {
-    value.and_then(Value::as_str).unwrap_or("").to_string()
+    match value {
+        None => String::new(),
+        Some(Value::String(text)) => text.clone(),
+        Some(Value::Number(number)) => number.to_string(),
+        Some(Value::Bool(flag)) => flag.to_string(),
+        Some(Value::Null) => String::new(),
+        Some(other) => other.to_string(),
+    }
 }
 
 fn campaign_view(raw: &Value) -> Value {
@@ -2619,6 +2626,18 @@ fn channel_points(token: &str, login: &str) -> Option<u64> {
 
 fn finish_streak_session(login: &str, points_before: Option<u64>, app: Option<tauri::AppHandle>) {
     let _guard = STREAK_DATA.lock().unwrap();
+    // уже закрыта другим потоком — ничего не делаем и не пишем дубль в журнал
+    let open = load_streaks()
+        .get("sessions")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().any(|session| {
+            text_of(session.get("login")) == login
+                && session.get("endedAt").map(Value::is_null).unwrap_or(false)
+        }))
+        .unwrap_or(false);
+    if !open {
+        return;
+    }
     let token = load_token().unwrap_or_default();
     let mut points_after = channel_points(&token, login);
     if points_after.is_none() && !token.is_empty() {

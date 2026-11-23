@@ -303,10 +303,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 emit(&json!({ "event": "error", "message": message }));
             }
         }
-        if Instant::now() + Duration::from_secs(interval) >= deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             break;
         }
-        std::thread::sleep(Duration::from_secs(interval));
+        let sleep_for = remaining.min(Duration::from_secs(interval));
+        std::thread::sleep(sleep_for);
     }
 
     emit(&json!({ "event": "stop", "ticks": ticks }));
