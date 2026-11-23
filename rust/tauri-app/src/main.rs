@@ -2968,10 +2968,10 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
                 match event.get("event").and_then(Value::as_str) {
                     Some("error") => log_warn(format!("Стрик watcher: {}", text_of(event.get("message")))),
                     Some("tick") => log_info(format!(
-                        "Стрик watcher tick: {} c, spade {}, прогресс {}",
-                        text_of(event.get("chunks")),
+                        "Стрик watcher tick: сегментов {}, spade {}, прогресс {}",
+                        text_of(event.get("chunksOk")),
                         text_of(event.get("spadeStatus")),
-                        text_of(event.get("progress"))
+                        event.get("progress").map(|value| value.to_string()).unwrap_or_default()
                     )),
                     _ => {}
                 }
