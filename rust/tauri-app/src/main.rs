@@ -3043,9 +3043,11 @@ fn snapshot_from_profile() -> Value {
                 }
                 let claimed = claimed_ids.contains(&benefit_id) || owned_titles.contains(&badge_name);
                 let paid = subs > 0.0 || minutes <= 0.0;
-                let note = if subs > 0.0 {
-                    "нужна подписка: оформляется на Twitch"
-                } else if campaign_has_paid {
+                // «финальная награда» относится только к дропс-кампании GTA6
+                let note = if campaign_has_paid
+                    && (campaign_name.to_lowercase().contains("gtavi")
+                        || game_name.to_lowercase().contains("grand theft auto"))
+                {
                     "финальная награда кампании: нужны все награды, включая платные"
                 } else {
                     ""
@@ -3056,14 +3058,8 @@ fn snapshot_from_profile() -> Value {
                         owned_titles.contains(required) || earned_titles.contains(required)
                     })
                     .unwrap_or(false);
-                let evolution_note = match prereq {
-                    Some(required) if evolution_ready => {
-                        format!("эволюция: {required} уже есть в профиле — можно получать")
-                    }
-                    Some(required) => format!("эволюция: нужен {required} — в профиле его нет"),
-                    None => String::new(),
-                };
-                let note = if evolution_note.is_empty() { note.to_string() } else { evolution_note };
+                // условие эволюции показывается строкой условия в UI, отдельная заметка не нужна
+                let note = note.to_string();
                 let blocked_evolution = prereq.map(|_| !evolution_ready).unwrap_or(false);
                 // финальная награда кампании с платными дропами бесплатно не выдаётся
                 let blocked_paid = campaign_has_paid && minutes > 0.0 && subs <= 0.0;

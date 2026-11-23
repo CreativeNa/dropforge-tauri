@@ -1021,12 +1021,18 @@ function dropRow(drop) {
 function badgeRow(badge) {
   const subs = Number(badge.requiredSubs ?? 0);
   const minutes = Number(badge.requiredMinutes ?? 0);
-  const requirement =
+  let condition =
     subs > 0
       ? `${subs} ${subsWord(subs)}`
       : minutes > 0
         ? `${minutes} мин просмотра`
         : 'Приобретите подписку первого уровня или подарочную подписку первого уровня';
+  if (badge.evolution) {
+    condition += badge.evolutionReady
+      ? ' · эволюция готова'
+      : ` · нужен ${badge.evolutionRequires}`;
+  }
+  const title = badge.game ? `${badge.name} — ${badge.game}` : badge.name;
   const art = badge.imageUrl;
   const status = badge.claimed
     ? '<span class="drop-status done">получен</span>'
@@ -1050,9 +1056,9 @@ function badgeRow(badge) {
       ${art ? `<img src="${esc(art)}" alt="" loading="lazy" data-fallback />` : ''}
     </div>
     <div class="drop-main">
-      <div class="drop-name" title="${esc(badge.name)}">${esc(badge.name)}</div>
-      <div class="drop-sub"><span>${esc(badge.campaign ?? '')}${badge.game ? ' · ' + esc(badge.game) : ''} · ${requirement}</span></div>
-      ${badge.note ? `<div class="drop-sub" style="opacity:.9${badge.evolution ? (badge.evolutionReady ? ';color:#7fd88f' : ';color:#e0a45c') : ''}"><span>${esc(badge.note)}</span></div>` : ''}
+      <div class="drop-name" title="${esc(title)}">${esc(title)}</div>
+      <div class="drop-sub"><span>${esc(condition)}</span></div>
+      ${badge.note ? `<div class="drop-sub" style="opacity:.9"><span>${esc(badge.note)}</span></div>` : ''}
     </div>
     ${status}
   </div>`;
