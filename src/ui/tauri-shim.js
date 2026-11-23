@@ -42,6 +42,7 @@
     streakRefresh: () => call('streak_refresh'),
     streakWatch: (login, channelId, minutes) => call('streak_watch', { login, channelId, minutes }),
     streakStop: () => call('streak_stop'),
+    logsOpen: () => call('logs_open'),
     localCheckChannel: (login) => call('local_check_channel', { login }),
     localClearChannel: () => call('local_clear_channel'),
     openExternal: (url) => call('shell_open', { url }),

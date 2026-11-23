@@ -272,6 +272,7 @@ fn reachable(url: &str) -> String {
 
 #[tauri::command]
 fn diagnostics_report(app: tauri::AppHandle) -> Value {
+    log_info("Диагностика: сбор отчёта");
     let profile = profile_dir();
     let dir = profile.join("diagnostics");
     let _ = std::fs::create_dir_all(&dir);
@@ -404,7 +405,7 @@ fn diagnostics_report(app: tauri::AppHandle) -> Value {
     lines.push(format!("network api.github.com: {}", reachable("https://api.github.com")));
     lines.push(format!("network drops.sunkwi.com: {}", reachable("https://drops.sunkwi.com/drops.json")));
     lines.push(String::from("logs:"));
-    for entry in LOGS.lock().unwrap().iter().rev().take(120).rev() {
+    for entry in LOGS.lock().unwrap().iter().rev().take(300).rev() {
         lines.push(format!("  {entry}"));
     }
     let report = mask_text(&lines.join("\n"));
@@ -556,6 +557,19 @@ fn report_issue(app: tauri::AppHandle, comment: String) -> Value {
 }
 
 #[tauri::command]
+fn logs_open() -> Value {
+    let path = log_file_path();
+    if !path.exists() {
+        return json!({ "ok": false, "error": "журнал ещё пуст" });
+    }
+    let mut explore = Command::new("explorer");
+    explore.arg(format!("/select,\"{}\"", path.display()));
+    hide_console(&mut explore);
+    let _ = explore.spawn();
+    json!({ "ok": true })
+}
+
+#[tauri::command]
 fn diagnostics_open() -> Value {
     let path = profile_dir().join("diagnostics").join("latest.txt");
     if !path.exists() {
@@ -573,6 +587,7 @@ fn diagnostics_open() -> Value {
 
 #[tauri::command]
 fn update_check() -> Value {
+    log_info("Обновление: проверка версии");
     let url = format!("https://api.github.com/repos/{UPDATE_REPO}/releases/latest");
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(20)))
@@ -678,6 +693,7 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[tauri::command]
 fn update_install(app: tauri::AppHandle, url: String, digest: Option<String>) -> Value {
+    log_info(format!("Обновление: установка {url}"));
     // только релизы этого репозитория: чужой zip не должен попасть в установку
     let allowed = format!("https://github.com/{UPDATE_REPO}/releases/download/");
     if !url.starts_with(&allowed) && !url.starts_with("https://objects.githubusercontent.com/") {
@@ -2406,6 +2422,7 @@ fn refresh_streak_live() {
         }
     }
     let streak_map = fetch_watch_streaks(&token, &logins);
+    log_info(format!("Стрик: проверка эфиров — каналов {}, в эфире {}, серии у {}", logins.len(), live_map.values().filter(|value| **value).count(), streak_map.len()));
     if let Some(items) = data["channels"].as_array_mut() {
         for item in items {
             let login = text_of(item.get("login"));
@@ -2521,6 +2538,7 @@ fn refresh_follows() -> Result<usize, String> {
     data["channels"] = json!(channels);
     data["updatedAt"] = json!(chrono::Utc::now().to_rfc3339());
     save_streaks(&data);
+    log_info(format!("Стрик: подписки загружены ({})", channels_len(&data)));
     refresh_streak_live();
     Ok(channels_len(&data))
 }
@@ -2613,6 +2631,10 @@ fn finish_streak_session(login: &str, points_before: Option<u64>, app: Option<ta
     };
     let mut data = load_streaks();
     streak_reset_day(&mut data);
+    log_info(format!(
+        "Стрик: финиш {login}, баллы {:?} → {:?}, дельта {:?}",
+        points_before, points_after, delta
+    ));
     let mut gained = false;
     if let Some(items) = data["channels"].as_array_mut() {
         for item in items {
@@ -2840,7 +2862,11 @@ fn start_chest_claimer(app: tauri::AppHandle) {
             Some(token) => token,
             None => continue,
         };
-        let Some((_balance, claim, factor)) = chest_status(&token, &login) else { continue };
+        let Some((balance, claim, factor)) = chest_status(&token, &login) else {
+            log_warn(format!("Сундук: {login} — статус не получен"));
+            continue;
+        };
+        log_info(format!("Сундук: {login} — баланс {balance}, награда {}", if claim.is_some() { "есть" } else { "нет" }));
         let Some(claim_id) = claim else { continue };
         if let Some((earned, _balance)) = claim_chest(&token, &channel_id, &claim_id) {
             record_chest(&login, earned);
@@ -2870,6 +2896,10 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
     let user_id = text_of(auth_state().get("userId"));
     let points_before = channel_points(&token, login);
     let unlimited = seconds == 0;
+    log_info(format!(
+        "Стрик: старт {login} (id {channel_id}), {} c, безлимит={}, баллы до={:?}",
+        seconds, unlimited, points_before
+    ));
     record_session_start(login, &chrono::Utc::now().to_rfc3339(), points_before, seconds, unlimited);
     let watch_minutes = if unlimited { 10080 } else { (seconds + 59) / 60 };
     if let Some(mut child) = STREAK_CHILD.lock().unwrap().take() {
@@ -2935,8 +2965,15 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
             use std::io::BufRead;
             for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
                 let Ok(event) = serde_json::from_str::<Value>(&line) else { continue };
-                if event.get("event").and_then(Value::as_str) == Some("error") {
-                    push_log("warn", format!("Стрик watcher: {}", text_of(event.get("message"))));
+                match event.get("event").and_then(Value::as_str) {
+                    Some("error") => log_warn(format!("Стрик watcher: {}", text_of(event.get("message")))),
+                    Some("tick") => log_info(format!(
+                        "Стрик watcher tick: {} c, spade {}, прогресс {}",
+                        text_of(event.get("chunks")),
+                        text_of(event.get("spadeStatus")),
+                        text_of(event.get("progress"))
+                    )),
+                    _ => {}
                 }
             }
             // вотчер завершился сам: стрим закончился или упал
@@ -3004,6 +3041,7 @@ fn start_streak_scheduler(app: tauri::AppHandle) {
             *STREAK_PENDING_AT.lock().unwrap() = 0;
             continue;
         }
+        log_info("Стрик: тик планировщика");
         let farm_running = STATUS
             .lock()
             .unwrap()
@@ -3011,9 +3049,11 @@ fn start_streak_scheduler(app: tauri::AppHandle) {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         if farm_running || !STREAK_ACTIVE.lock().unwrap().is_null() {
+            log_info(format!("Стрик: пропуск (фарм={farm_running}, активен={})", !STREAK_ACTIVE.lock().unwrap().is_null()));
             continue;
         }
         let candidates = streak_candidates();
+        log_info(format!("Стрик: кандидатов {}", candidates.len()));
         if candidates.is_empty() {
             *STREAK_PENDING_AT.lock().unwrap() = 0;
             continue;
@@ -3071,6 +3111,7 @@ fn restart_pubsub(app: &tauri::AppHandle) {
 
 #[tauri::command]
 fn streak_stop(app: tauri::AppHandle) -> Value {
+    log_info("Стрик: остановка пользователем");
     stop_streak();
     let _ = app.emit("state", snapshot_from_profile());
     streak_view()
@@ -3083,6 +3124,7 @@ fn streak_snapshot() -> Value {
 
 #[tauri::command]
 fn streak_settings_save(app: tauri::AppHandle, patch: Value) -> Value {
+    log_info(format!("Стрик: настройки {}", patch.to_string()));
     let mut settings = load_settings();
     let mut keeper = settings.get("streakKeeper").cloned().unwrap_or_else(|| json!({}));
     if let (Some(target), Some(source)) = (keeper.as_object_mut(), patch.as_object()) {
@@ -3098,6 +3140,7 @@ fn streak_settings_save(app: tauri::AppHandle, patch: Value) -> Value {
 
 #[tauri::command]
 fn streak_refresh(app: tauri::AppHandle) -> Value {
+    log_info("Стрик: обновление подписок вручную");
     let result = refresh_follows();
     if result.is_ok() {
         restart_pubsub(&app);
@@ -3119,6 +3162,7 @@ fn streak_refresh(app: tauri::AppHandle) -> Value {
 
 #[tauri::command]
 fn streak_watch(app: tauri::AppHandle, login: String, channel_id: String, minutes: Option<u64>) -> Value {
+    log_info(format!("Стрик: ручной запуск {login}, минуты={minutes:?}"));
     let seconds = match minutes {
         Some(value) if value == 0 => 0,
         Some(value) => value * 60,
@@ -3174,11 +3218,13 @@ fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_i
                             let _ = handle.emit("state", snapshot_from_profile());
                         }
                     }
-                    let _ = handle.emit("log", json!({
-                        "at": "",
-                        "level": "info",
-                        "message": format!("PubSub {topic}: {}", &payload[..payload.len().min(160)])
-                    }));
+                    let kind = serde_json::from_str::<Value>(&payload)
+                        .ok()
+                        .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_string))
+                        .unwrap_or_default();
+                    if kind != "viewcount" {
+                        log_info(format!("PubSub {topic} [{kind}]: {}", &payload[..payload.len().min(300)]));
+                    }
                 }
                 _ => {}
             }
@@ -3455,14 +3501,14 @@ fn advance_game(app: Option<tauri::AppHandle>) {
     std::thread::sleep(std::time::Duration::from_secs(5));
     let games = GAMES.lock().unwrap().clone();
     if games.len() <= 1 {
-        eprintln!("rotation: одна игра в очереди — остаёмся");
+        log_info("Ротация: одна игра в очереди — остаюсь");
         return;
     }
     let mut index = GAME_INDEX.lock().unwrap();
     *index = (*index + 1) % games.len();
     let slug = games[*index].clone();
     drop(index);
-    push_log("info", format!("Переключаюсь на {slug}"));
+    log_info(format!("Ротация: переключаюсь на {slug}"));
     let result = start_miner(app, &slug);
     eprintln!("rotation: {result}");
 }
@@ -3476,6 +3522,7 @@ fn start_miner(app: Option<tauri::AppHandle>, slug: &str) -> Value {
 fn start_miner_on(app: Option<tauri::AppHandle>, slug: &str, preferred: Option<&str>) -> Value {
     let token = load_token().unwrap_or_default();
     let Some(exe) = watcher_exe() else {
+        log_error("Фарм: watcher-svc не найден");
         return json!({ "error": "watcher-svc не найден рядом с приложением" });
     };
     let preferred_channel = preferred
@@ -3500,7 +3547,7 @@ fn start_miner_on(app: Option<tauri::AppHandle>, slug: &str, preferred: Option<&
         } else {
             format!("нет живых каналов с Drops для {slug}")
         };
-        push_log("warn", message.clone());
+        log_warn(format!("Фарм: {}", message));
         return json!({ "error": message });
     };
 
@@ -3629,6 +3676,7 @@ fn start_miner_on(app: Option<tauri::AppHandle>, slug: &str, preferred: Option<&
             *guard = Some(child);
             let scope = if is_local_campaign { "локальная кампания" } else { "глобальная кампания" };
             let message = format!("Смотрю {login} · {scope}");
+            log_info(format!("Вотчер: смотрю {login} · {slug} · pid {pid}"));
             save_farm_state(true, slug, &login);
             *STATUS.lock().unwrap() = json!({
                 "state": "watching",
@@ -3648,6 +3696,7 @@ fn start_miner_on(app: Option<tauri::AppHandle>, slug: &str, preferred: Option<&
 }
 
 fn stop_miner() -> Value {
+    log_info("Фарм: остановка");
     save_farm_state(false, "", "");
     *STOPPING.lock().unwrap() = true;
     let mut guard = CHILD.lock().unwrap();
@@ -3665,14 +3714,48 @@ fn stop_miner() -> Value {
     json!({ "ok": true })
 }
 
+fn log_file_path() -> PathBuf {
+    profile_dir().join("logs").join("app.log")
+}
+
+fn write_log_line(level: &str, message: &str) {
+    let dir = profile_dir().join("logs");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("app.log");
+    if let Ok(meta) = std::fs::metadata(&path) {
+        if meta.len() > 2_000_000 {
+            let _ = std::fs::remove_file(dir.join("app.1.log"));
+            let _ = std::fs::rename(&path, dir.join("app.1.log"));
+        }
+    }
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+        use std::io::Write;
+        let stamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
+        let _ = writeln!(file, "{stamp} [{level}] {}", message.replace('\n', " / "));
+    }
+}
+
 fn push_log(level: &str, message: String) {
+    write_log_line(level, &message);
     let entry = json!({ "at": chrono::Utc::now().to_rfc3339(), "level": level, "message": message });
     let mut logs = LOGS.lock().unwrap();
     logs.push(entry);
-    if logs.len() > 200 {
-        let extra = logs.len() - 200;
+    if logs.len() > 500 {
+        let extra = logs.len() - 500;
         logs.drain(0..extra);
     }
+}
+
+fn log_info(message: impl Into<String>) {
+    push_log("info", message.into());
+}
+
+fn log_warn(message: impl Into<String>) {
+    push_log("warn", message.into());
+}
+
+fn log_error(message: impl Into<String>) {
+    push_log("error", message.into());
 }
 
 /// Не даём запустить вторую копию: именованный мьютекс на процесс.
@@ -4474,6 +4557,7 @@ fn settings_games() -> Vec<String> {
 
 #[tauri::command]
 fn settings_save(app: tauri::AppHandle, patch: Value) -> Value {
+    log_info(format!("Настройки: {}", patch.to_string().chars().take(300).collect::<String>()));
     let mut settings = load_settings();
     let refresh_changed = patch.get("refreshMinutes").is_some();
     if let (Some(target), Some(source)) = (settings.as_object_mut(), patch.as_object()) {
@@ -4498,6 +4582,7 @@ fn settings_save(app: tauri::AppHandle, patch: Value) -> Value {
 
 #[tauri::command]
 fn games_toggle(slug: String) -> Value {
+    log_info(format!("Игры: переключение {slug}"));
     let mut settings = load_settings();
     let mut games = settings_games();
     if let Some(position) = games.iter().position(|item| item == &slug) {
@@ -4512,6 +4597,7 @@ fn games_toggle(slug: String) -> Value {
 
 #[tauri::command]
 fn games_pin(slug: String) -> Value {
+    log_info(format!("Игры: закрепление {slug}"));
     let mut settings = load_settings();
     let mut pinned: Vec<String> = settings
         .get("pinned")
@@ -4538,6 +4624,7 @@ fn games_select_only(slugs: Vec<String>) -> Value {
 
 #[tauri::command]
 fn farm_game(slug: String) -> Value {
+    log_info(format!("Фарм: выбран канал/игра {slug}"));
     let mut settings = load_settings();
     let games = settings_games();
     if !games.iter().any(|item| item == &slug) {
@@ -4553,6 +4640,7 @@ fn farm_game(slug: String) -> Value {
 
 #[tauri::command]
 fn farm_clear() -> Value {
+    log_info("Фарм: очередь очищена");
     let mut settings = load_settings();
     settings["games"] = json!([]);
     let _ = save_settings(&settings);
@@ -4564,6 +4652,7 @@ fn farm_clear() -> Value {
 
 #[tauri::command]
 fn farm_skip() -> Value {
+    log_info("Фарм: пропуск текущей игры");
     advance_game(None);
     snapshot_from_profile()
 }
@@ -4721,6 +4810,7 @@ fn farm_start(app: tauri::AppHandle) -> Value {
     *STOPPING.lock().unwrap() = false;
     *GAMES.lock().unwrap() = games;
     *GAME_INDEX.lock().unwrap() = 0;
+    log_info(format!("Фарм: запуск игры {slug}"));
     let result = start_miner(Some(app.clone()), &slug);
     if let Some(error) = result.get("error") {
         push_log("warn", format!("Автофарм не запущен: {error}"));
@@ -4743,6 +4833,7 @@ fn farm_stop(app: tauri::AppHandle) -> Value {
 
 #[tauri::command]
 async fn auth_login_device(app: tauri::AppHandle) -> Result<Value, String> {
+    log_info("Вход: запуск device flow");
     let started = device_start()?;
     *DEVICE.lock().unwrap() = json!({ "userCode": started.get("userCode"), "uri": started.get("uri") });
     open_external(text_of(started.get("uri")));
@@ -4754,16 +4845,29 @@ async fn auth_login_device(app: tauri::AppHandle) -> Result<Value, String> {
     *DEVICE.lock().unwrap() = Value::Null;
     // Полученный токен нужно сохранить, иначе вход «успешен», а профиль пуст.
     match save_token(token.trim()) {
-        Some(_) => Ok(snapshot_from_profile()),
-        None => Err("Twitch не принял токен устройства".into()),
+        Some(_) => {
+            log_info("Вход: токен устройства сохранён");
+            Ok(snapshot_from_profile())
+        }
+        None => {
+            log_error("Вход: Twitch не принял токен устройства");
+            Err("Twitch не принял токен устройства".into())
+        }
     }
 }
 
 #[tauri::command]
 fn auth_login_token(token: String) -> Result<Value, String> {
+    log_info("Вход: токен вставлен вручную");
     match save_token(token.trim()) {
-        Some(_) => Ok(snapshot_from_profile()),
-        None => Err("Токен не принят Twitch".into()),
+        Some(_) => {
+            log_info("Вход: токен принят");
+            Ok(snapshot_from_profile())
+        }
+        None => {
+            log_error("Вход: токен не принят Twitch");
+            Err("Токен не принят Twitch".into())
+        }
     }
 }
 
@@ -4828,6 +4932,7 @@ fn reset_profile() {
 
 #[tauri::command]
 fn auth_logout(app: tauri::AppHandle) -> Value {
+    log_info("Аккаунт: выход, сброс профиля");
     // останавливаем всё, что связано с фармом
     stop_miner();
     if let Some(state) = app.try_state::<MinerState>() {
@@ -4850,6 +4955,7 @@ fn auth_logout(app: tauri::AppHandle) -> Value {
 
 #[tauri::command]
 fn inventory_refresh(app: tauri::AppHandle) -> Value {
+    log_info("Склад: обновление запущено");
     let handle = app.clone();
     std::thread::spawn(move || {
         let _ = handle.emit("refresh", json!({ "active": true }));
@@ -5088,6 +5194,7 @@ fn clipboard_copy_text(text: String) -> Value {
 
 #[tauri::command]
 fn app_quit(app: tauri::AppHandle) {
+    log_info("Приложение: выход по команде");
     app.exit(0);
 }
 #[tauri::command]
@@ -5192,6 +5299,7 @@ fn main() {
                 }
                 std::process::exit(0);
             }
+            log_info(format!("Запуск DropForge {APP_VERSION}, профиль: {}", mask_text(&profile_dir().display().to_string())));
             legacy_cleanup();
             {
                 let handle = app.handle().clone();
@@ -5337,7 +5445,6 @@ fn main() {
                     if let Ok(count) = refresh_follows() {
                         push_log("info", format!("Стрики: подписки загружены ({count})"));
                     }
-                    refresh_streak_live();
                     let _ = handle.emit("state", snapshot_from_profile());
                 });
             }
@@ -5420,6 +5527,7 @@ fn main() {
             shell_open,
             diagnostics_report,
             diagnostics_open,
+            logs_open,
             legacy_launch,
             report_summary,
             report_issue,

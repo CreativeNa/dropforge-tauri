@@ -1506,6 +1506,7 @@ function settingsView() {
           <button class="btn-ghost" data-action="diagnostics-open">Открыть отчёт</button>
           <button class="btn-ghost" data-action="diagnostics">Собрать отчёт</button>
           <button class="btn-ghost" data-action="copy-logs">Скопировать журнал</button>
+          <button class="btn-ghost" data-action="logs-open">Открыть файл журнала</button>
         </div>
       </div>
       <div class="row" style="display:block">
@@ -2003,6 +2004,15 @@ const actions = {
       }
     } catch (error) {
       toast('Стрики: ' + error.message, 'error');
+    }
+  },
+
+  async 'logs-open'() {
+    try {
+      const result = await api.logsOpen();
+      if (result && result.ok === false) toast(result.error || 'Журнал недоступен', 'error');
+    } catch (error) {
+      toast('Журнал: ' + error.message, 'error');
     }
   },
 
