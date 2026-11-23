@@ -1238,7 +1238,7 @@ function streakSheet() {
     const ended = session.endedAt ? fmtTime(session.endedAt) : 'сейчас';
     const minutes = Number(session.minutes) || 0;
     return `
-      <div class="streak-sheet-row" style="animation-delay:${index * 26}ms">
+      <div class="streak-sheet-row" style="${state.streakAnimating ? `animation-delay:${index * 26}ms` : 'animation:none'}">
         <div class="streak-sheet-time">${started} → ${ended}</div>
         <div class="streak-sheet-points">
           <span>${hasBefore ? before.toLocaleString('ru-RU') : '—'}</span>
@@ -1569,6 +1569,7 @@ function render() {
           ? streaksView()
           : settingsView();
 
+  const streakListScroll = document.querySelector('.streak-sheet-list')?.scrollTop ?? 0;
   root.innerHTML = `
     <div class="app">
       ${sidebar()}
@@ -1584,6 +1585,9 @@ function render() {
 
   const contentEl = document.getElementById('content');
   if (contentEl) contentEl.scrollTop = state.scrollTop;
+
+  const streakListEl = document.querySelector('.streak-sheet-list');
+  if (streakListEl && streakListScroll) streakListEl.scrollTop = streakListScroll;
 
   for (const img of document.querySelectorAll('img[data-fallback]')) {
     img.addEventListener('error', () => img.remove(), { once: true });
