@@ -1203,7 +1203,9 @@ function streakSheet() {
   const channels = streak.channels ?? [];
   const channel = channels.find((item) => item.login === state.streakChannel);
   if (!channel) return '';
-  const sessions = (streak.sessions ?? []).filter((session) => session.login === channel.login);
+  const allSessions = (streak.sessions ?? []).filter((session) => session.login === channel.login);
+  const MAX_ROWS = 10;
+  const sessions = allSessions.slice(0, MAX_ROWS);
   const fmtTime = (value) => {
     if (!value) return '';
     const date = new Date(value);
@@ -1212,7 +1214,7 @@ function streakSheet() {
     const time = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
     return sameDay ? time : date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + time;
   };
-  const deltas = sessions
+  const deltas = allSessions
     .map((session) => {
       const before = Number(session.pointsBefore);
       const after = Number(session.pointsAfter);
@@ -1227,12 +1229,12 @@ function streakSheet() {
     }
     return Number(session.minutes) || 0;
   };
-  const totalMinutes = sessions.reduce((sum, session) => sum + sessionMinutes(session), 0);
+  const totalMinutes = allSessions.reduce((sum, session) => sum + sessionMinutes(session), 0);
   const totalPoints = deltas.reduce((sum, value) => sum + value, 0);
   const best = deltas.length ? Math.max(...deltas) : null;
-  const gainedCount = sessions.filter((session) => session.gained).length;
-  const chestsCount = sessions.reduce((sum, session) => sum + (Number(session.chestsClaimed) || 0), 0);
-  const bonusPoints = sessions.reduce((sum, session) => sum + (Number(session.bonusPoints) || 0), 0);
+  const gainedCount = allSessions.filter((session) => session.gained).length;
+  const chestsCount = allSessions.reduce((sum, session) => sum + (Number(session.chestsClaimed) || 0), 0);
+  const bonusPoints = allSessions.reduce((sum, session) => sum + (Number(session.bonusPoints) || 0), 0);
   const streakValue = Number(channel.streak) > 0 ? channel.streak : null;
   const status = channel.live ? 'В эфире' : channel.watchedToday ? 'Смотрел сегодня' : 'Офлайн';
 
@@ -1278,7 +1280,7 @@ function streakSheet() {
       <button class="streak-sheet-close" data-action="streak-sheet-close" title="Закрыть">×</button>
     </header>
     <div class="streak-sheet-metrics">
-      <div><b>${sessions.length}</b><span>просмотров</span></div>
+      <div><b>${allSessions.length}</b><span>просмотров</span></div>
       <div><b>${totalMinutes}</b><span>минут</span></div>
       <div><b>${deltas.length ? (totalPoints > 0 ? '+' : '') + totalPoints : '—'}</b><span>баллов</span></div>
       <div><b>${best !== null ? (best > 0 ? '+' : '') + best : '—'}</b><span>лучший прирост</span></div>
@@ -1289,6 +1291,7 @@ function streakSheet() {
     <div class="streak-sheet-list">
       ${rows || '<div class="streak-sheet-empty">Просмотров этого канала ещё не было. Запусти просмотр — здесь появятся время, баллы и результат.</div>'}
     </div>
+    ${allSessions.length > MAX_ROWS ? `<div class="streak-sheet-more">Показаны последние ${MAX_ROWS} из ${allSessions.length}</div>` : ''}
   </aside>`;
 }
 

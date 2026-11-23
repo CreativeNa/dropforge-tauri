@@ -3254,3 +3254,10 @@ body.sheet-open .content {
   font-size: 12px;
   color: var(--text-2);
 }
+
+.streak-sheet-more {
+  padding: 8px 12px 0;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+}
