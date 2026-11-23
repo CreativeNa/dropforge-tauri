@@ -1292,6 +1292,7 @@ function closeStreakSheet() {
   setTimeout(() => {
     state.streakChannel = null;
     state.streakClosing = false;
+    document.body.classList.remove('sheet-open');
     render();
   }, 260);
 }
@@ -1854,6 +1855,7 @@ const actions = {
     state.streakChannel = target.dataset.login;
     state.streakClosing = false;
     state.streakAnimating = true;
+    document.body.classList.add('sheet-open');
     render();
     setTimeout(() => {
       state.streakAnimating = false;

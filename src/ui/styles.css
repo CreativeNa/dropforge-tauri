@@ -3115,16 +3115,15 @@ button {
 
 .streak-sheet-list {
   overflow-y: auto;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
+  scrollbar-width: none;
   border: 1px solid var(--line-soft);
   border-radius: 12px;
   background: var(--panel);
 }
 
 .streak-sheet-list::-webkit-scrollbar {
-  width: 8px;
+  width: 0;
+  height: 0;
 }
 
 .streak-sheet-list::-webkit-scrollbar-track {
@@ -3239,6 +3238,11 @@ button {
   }
 }
 
-body:has(.streak-sheet) .content {
+html,
+body {
+  overflow: hidden;
+}
+
+body.sheet-open .content {
   overflow-y: hidden;
 }
