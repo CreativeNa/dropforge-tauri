@@ -4003,12 +4003,16 @@ fn snapshot_from_profile() -> Value {
                 .and_then(Value::as_f64)
                 .unwrap_or(0.0) as usize;
             let day_closed = manual_closed || today_minutes >= 60.0 || chests > seen_before;
-            if let Some(root) = settings_snapshot.as_object_mut() {
-                let seen = root.entry("chainsSeen").or_insert_with(|| json!({}));
-                if let Some(map) = seen.as_object_mut() {
-                    map.insert(game_slug.clone(), json!(chests));
+            // пишем настройки только когда число цепочек реально изменилось:
+            // иначе каждый снимок перезаписывает settings.json и зацикливает опрос UI
+            if chests != seen_before {
+                if let Some(root) = settings_snapshot.as_object_mut() {
+                    let seen = root.entry("chainsSeen").or_insert_with(|| json!({}));
+                    if let Some(map) = seen.as_object_mut() {
+                        map.insert(game_slug.clone(), json!(chests));
+                    }
+                    let _ = save_settings(&settings_snapshot);
                 }
-                let _ = save_settings(&settings_snapshot);
             }
             // Twitch не отдаёт цепочки в API — разрешаем отметить вручную
             let manual = load_settings()
