@@ -1225,6 +1225,8 @@ function streakSheet() {
   const totalPoints = deltas.reduce((sum, value) => sum + value, 0);
   const best = deltas.length ? Math.max(...deltas) : null;
   const gainedCount = sessions.filter((session) => session.gained).length;
+  const chestsCount = sessions.reduce((sum, session) => sum + (Number(session.chestsClaimed) || 0), 0);
+  const bonusPoints = sessions.reduce((sum, session) => sum + (Number(session.bonusPoints) || 0), 0);
   const streakValue = Number(channel.streak) > 0 ? channel.streak : null;
   const status = channel.live ? 'В эфире' : channel.watchedToday ? 'Смотрел сегодня' : 'Офлайн';
 
@@ -1246,7 +1248,7 @@ function streakSheet() {
           <span>${hasAfter ? after.toLocaleString('ru-RU') : '—'}</span>
           ${delta !== null ? `<b class="${delta > 449 ? 'gain' : delta > 0 ? 'plus' : ''}">${delta > 0 ? '+' : ''}${delta}</b>` : ''}
         </div>
-        <div class="streak-sheet-dur">${session.unlimited ? '∞' : minutes + ' мин'}</div>
+        <div class="streak-sheet-dur">${session.unlimited ? '∞' : minutes + ' мин'}${Number(session.chestsClaimed) > 0 ? ' · +' + session.chestsClaimed : ''}</div>
         ${session.gained ? '<span class="streak-sheet-gain">серия</span>' : ''}
       </div>`;
   }).join('');
@@ -1275,6 +1277,8 @@ function streakSheet() {
       <div><b>${deltas.length ? (totalPoints > 0 ? '+' : '') + totalPoints : '—'}</b><span>баллов</span></div>
       <div><b>${best !== null ? (best > 0 ? '+' : '') + best : '—'}</b><span>лучший прирост</span></div>
       <div><b>${gainedCount}</b><span>продлений</span></div>
+      <div><b>${chestsCount}</b><span>сундуков</span></div>
+      <div><b>${bonusPoints > 0 ? '+' + bonusPoints : '—'}</b><span>бонус</span></div>
     </div>
     <div class="streak-sheet-list">
       ${rows || '<div class="streak-sheet-empty">Просмотров этого канала ещё не было. Запусти просмотр — здесь появятся время, баллы и результат.</div>'}
@@ -1400,6 +1404,10 @@ function streaksView() {
       <input class="streak-limit-input" type="number" min="1" max="20" value="${limit}" data-action="streak-limit" />
     </div>
     <div class="streak-toolbar-info">задержка до ${delay} мин · ${channels.length} каналов в подписках</div>
+    <label class="streak-claim">
+      <span>Забирать сундуки</span>
+      <button class="switch ${streak.claimChests ? 'on' : ''}" data-action="streak-claim-toggle"></button>
+    </label>
     <div class="streak-toolbar-actions">
       <button class="btn-ghost small" data-action="streak-refresh">Обновить список</button>
       <button class="btn-ghost small" data-action="streak-relink">Переподключить Twitch</button>
@@ -1924,6 +1932,16 @@ const actions = {
   async 'streak-menu'() {
     state.streakMenu = !state.streakMenu;
     render();
+  },
+
+  async 'streak-claim-toggle'() {
+    const enabled = !(state.snapshot.streak?.claimChests);
+    applySnapshot({ ...state.snapshot, streak: { ...(state.snapshot.streak ?? {}), claimChests: enabled } });
+    try {
+      await api.streakSave({ claimChests: enabled });
+    } catch (error) {
+      toast('Стрики: ' + error.message, 'error');
+    }
   },
 
   async 'streak-stop'() {

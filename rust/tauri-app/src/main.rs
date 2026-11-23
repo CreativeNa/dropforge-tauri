@@ -2265,6 +2265,7 @@ fn streak_view() -> Value {
         "minMinutes": cfg.get("minMinutes").and_then(Value::as_u64).unwrap_or(6),
         "maxMinutes": cfg.get("maxMinutes").and_then(Value::as_u64).unwrap_or(20),
         "delayMaxMinutes": cfg.get("delayMaxMinutes").and_then(Value::as_u64).unwrap_or(7),
+        "claimChests": cfg.get("claimChests").and_then(Value::as_bool).unwrap_or(true),
         "active": STREAK_ACTIVE.lock().unwrap().clone(),
         "pendingAt": *STREAK_PENDING_AT.lock().unwrap(),
         "channels": data.get("channels").cloned().unwrap_or(json!([])),
@@ -2667,6 +2668,8 @@ fn record_session_start(login: &str, started_at: &str, points_before: Option<u64
         "minutes": if unlimited { 0 } else { minutes },
         "unlimited": unlimited,
         "gained": false,
+        "chestsClaimed": 0,
+        "bonusPoints": 0,
     }));
     let len = sessions.len();
     if len > 100 {
@@ -2690,6 +2693,136 @@ fn finish_session_record(login: &str, points_after: Option<u64>, gained: bool) {
         }
     }
     save_streaks(&data);
+}
+
+fn chest_status(token: &str, login: &str) -> Option<(u64, Option<String>, f64)> {
+    let response = streak_gql(
+        "query($login:String!){ channel(name:$login){ self { communityPoints { balance availableClaim { id } activeMultipliers { factor } } } } }",
+        json!({ "login": login }),
+        token,
+    )?;
+    let points = response
+        .get("data")
+        .and_then(|data| data.get("channel"))
+        .and_then(|channel| channel.get("self"))
+        .and_then(|me| me.get("communityPoints"))?;
+    let balance = points.get("balance").and_then(Value::as_u64).unwrap_or(0);
+    let claim = points
+        .get("availableClaim")
+        .and_then(|claim| claim.get("id"))
+        .map(|value| text_of(Some(value)))
+        .filter(|value| !value.is_empty());
+    let factor = points
+        .get("activeMultipliers")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("factor"))
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    Some((balance, claim, factor))
+}
+
+fn claim_chest(token: &str, channel_id: &str, claim_id: &str) -> Option<(u64, u64)> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(20)))
+        .user_agent("Mozilla/5.0 DropForge/1.1")
+        .build()
+        .new_agent();
+    let response: Value = agent
+        .post("https://gql.twitch.tv/gql")
+        .header("Client-Id", &auth_client_id())
+        .header("Authorization", &format!("OAuth {token}"))
+        .header("Content-Type", "application/json")
+        .send(json!({
+            "operationName": "ClaimCommunityPoints",
+            "variables": { "input": { "channelID": channel_id, "claimID": claim_id } },
+            "extensions": {
+                "persistedQuery": {
+                    "version": 1,
+                    "sha256Hash": "46aaeebe02c99afdf4fc97c7c0cba964124bf6b0af229395f1f6d1feed05b3d0"
+                }
+            }
+        }).to_string())
+        .ok()?
+        .body_mut()
+        .read_json()
+        .ok()?;
+    let claim = response.get("data")?.get("claimCommunityPoints")?;
+    if !claim.get("error").map(Value::is_null).unwrap_or(true) {
+        return None;
+    }
+    let earned = claim
+        .get("claim")
+        .and_then(|claim| claim.get("pointsEarnedTotal"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let balance = claim
+        .get("currentPoints")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    Some((earned, balance))
+}
+
+fn record_chest(login: &str, earned: u64) {
+    let _guard = STREAK_DATA.lock().unwrap();
+    let mut data = load_streaks();
+    if let Some(items) = data["channels"].as_array_mut() {
+        for item in items {
+            if text_of(item.get("login")) == login {
+                let total = item.get("chestsClaimed").and_then(Value::as_u64).unwrap_or(0) + 1;
+                let points = item.get("pointsFromChests").and_then(Value::as_u64).unwrap_or(0) + earned;
+                item["chestsClaimed"] = json!(total);
+                item["pointsFromChests"] = json!(points);
+                item["lastChestAt"] = json!(chrono::Utc::now().to_rfc3339());
+            }
+        }
+    }
+    if let Some(sessions) = data["sessions"].as_array_mut() {
+        for session in sessions.iter_mut().rev() {
+            if text_of(session.get("login")) == login && session.get("endedAt").map(Value::is_null).unwrap_or(false) {
+                let chests = session.get("chestsClaimed").and_then(Value::as_u64).unwrap_or(0) + 1;
+                let bonus = session.get("bonusPoints").and_then(Value::as_u64).unwrap_or(0) + earned;
+                session["chestsClaimed"] = json!(chests);
+                session["bonusPoints"] = json!(bonus);
+                break;
+            }
+        }
+    }
+    save_streaks(&data);
+}
+
+fn start_chest_claimer(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        // проверяем не по таймеру, а в случайные 4–7 минут (с секундами)
+        let delay = 240 + pseudo_random(181);
+        std::thread::sleep(std::time::Duration::from_secs(delay));
+        if !streak_flag("claimChests", true) {
+            continue;
+        }
+        let active = STREAK_ACTIVE.lock().unwrap().clone();
+        let login = text_of(active.get("login"));
+        let channel_id = text_of(active.get("channelId"));
+        if login.is_empty() || channel_id.is_empty() {
+            continue;
+        }
+        let token = match load_token() {
+            Some(token) => token,
+            None => continue,
+        };
+        let Some((_balance, claim, factor)) = chest_status(&token, &login) else { continue };
+        let Some(claim_id) = claim else { continue };
+        if let Some((earned, _balance)) = claim_chest(&token, &channel_id, &claim_id) {
+            record_chest(&login, earned);
+            push_log(
+                "info",
+                format!(
+                    "Стрик: сундук {login} +{earned} баллов{}",
+                    if factor > 0.0 { format!(" (множитель ×{:.1})", 1.0 + factor) } else { String::new() }
+                ),
+            );
+            let _ = app.emit("state", snapshot_from_profile());
+        }
+    });
 }
 
 fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &str, minutes: u64) -> Value {
@@ -2747,6 +2880,8 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
         "until": until,
         "unlimited": unlimited,
         "pointsBefore": points_before,
+        "chestsClaimed": 0,
+        "bonusPoints": 0,
     });
     push_log(
         "info",
@@ -4232,7 +4367,8 @@ fn load_settings() -> Value {
                 "minMinutes": 6,
                 "maxMinutes": 20,
                 "delayMaxMinutes": 7,
-                "excluded": ["diloindys", "mersufy", "7tvapp", "ravenbtw"]
+                "excluded": ["diloindys", "mersufy", "7tvapp", "ravenbtw"],
+                "claimChests": true
             }
         })
     })
@@ -5177,6 +5313,7 @@ fn main() {
                 start_pubsub_watchdog(app.handle().clone());
                 start_tray_updater(app.handle().clone());
                 start_streak_scheduler(app.handle().clone());
+                start_chest_claimer(app.handle().clone());
                 {
                     let _guard = STREAK_DATA.lock().unwrap();
                     close_open_sessions(None, None);

@@ -3246,3 +3246,11 @@ body {
 body.sheet-open .content {
   overflow-y: hidden;
 }
+
+.streak-claim {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-2);
+}
