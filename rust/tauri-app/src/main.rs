@@ -3365,6 +3365,8 @@ fn record_watch_progress(slug: &str, drop_id: &str, minutes: f64) {
     let mut progress = read_json(progress_path()).unwrap_or_else(|| json!({}));
     let Some(root) = progress.as_object_mut() else { return };
     let at = chrono::Utc::now().to_rfc3339();
+    // at — время последнего обновления прогресса, его же читает диагностика
+    root.insert("at".into(), json!(at.clone()));
     root.insert(
         "watch".into(),
         json!({ "game": slug, "dropId": drop_id, "currentMinutes": minutes, "at": at }),
@@ -3386,6 +3388,10 @@ fn record_watch_progress(slug: &str, drop_id: &str, minutes: f64) {
             .and_then(|value| value.get("isClaimed"))
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let instance_id = existing
+            .as_ref()
+            .and_then(|value| value.get("instanceId").cloned())
+            .unwrap_or(Value::Null);
         map.insert(
             drop_id.to_string(),
             json!({
@@ -3393,6 +3399,7 @@ fn record_watch_progress(slug: &str, drop_id: &str, minutes: f64) {
                 "currentMinutes": minutes,
                 "requiredMinutes": required,
                 "isClaimed": claimed,
+                "instanceId": instance_id,
                 "game": slug,
             }),
         );
