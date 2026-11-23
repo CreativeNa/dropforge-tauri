@@ -2749,6 +2749,9 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
             format!("Стрик: смотрю {login} ~{minutes} мин")
         },
     );
+    if let Some(handle) = &app {
+        let _ = handle.emit("state", snapshot_from_profile());
+    }
 
     if let Some(stdout) = stdout {
         let handle = app.clone();
@@ -4692,7 +4695,7 @@ fn progress_refresh_due() -> bool {
 fn app_snapshot_stamp() -> Value {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for name in ["catalog-cache.json", "progress.json", "settings.json", "auth.json"] {
+    for name in ["catalog-cache.json", "progress.json", "settings.json", "auth.json", "streaks.json"] {
         if let Ok(meta) = std::fs::metadata(profile_dir().join(name)) {
             meta.len().hash(&mut hasher);
             if let Ok(modified) = meta.modified() {
@@ -4703,6 +4706,8 @@ fn app_snapshot_stamp() -> Value {
         }
     }
     STATUS.lock().unwrap().to_string().hash(&mut hasher);
+    STREAK_ACTIVE.lock().unwrap().to_string().hash(&mut hasher);
+    STREAK_CHILD.lock().unwrap().as_ref().map(|child| child.id()).hash(&mut hasher);
     CHILD.lock().unwrap().as_ref().map(|child| child.id()).hash(&mut hasher);
     json!({ "stamp": format!("{:x}", hasher.finish()) })
 }
