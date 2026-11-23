@@ -2571,7 +2571,11 @@ fn channel_points(token: &str, login: &str) -> Option<u64> {
 fn finish_streak_session(login: &str, points_before: Option<u64>, app: Option<tauri::AppHandle>) {
     let _guard = STREAK_DATA.lock().unwrap();
     let token = load_token().unwrap_or_default();
-    let points_after = channel_points(&token, login);
+    let mut points_after = channel_points(&token, login);
+    if points_after.is_none() && !token.is_empty() {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        points_after = channel_points(&token, login);
+    }
     let delta = match (points_before, points_after) {
         (Some(before), Some(after)) if after > before => Some(after - before),
         _ => None,
@@ -2618,7 +2622,7 @@ fn finish_streak_session(login: &str, points_before: Option<u64>, app: Option<ta
     }
 }
 
-fn close_open_sessions(login: Option<&str>) {
+fn close_open_sessions(login: Option<&str>, points_after: Option<u64>) {
     let mut data = load_streaks();
     let ended_at = chrono::Utc::now().to_rfc3339();
     let mut changed = false;
@@ -2633,7 +2637,10 @@ fn close_open_sessions(login: Option<&str>) {
                 }
             }
             session["endedAt"] = json!(ended_at);
-            session["pointsAfter"] = Value::Null;
+            session["pointsAfter"] = match points_after {
+                Some(value) => json!(value),
+                None => Value::Null,
+            };
             changed = true;
         }
     }
@@ -2644,7 +2651,7 @@ fn close_open_sessions(login: Option<&str>) {
 
 fn record_session_start(login: &str, started_at: &str, points_before: Option<u64>, minutes: u64, unlimited: bool) {
     let _guard = STREAK_DATA.lock().unwrap();
-    close_open_sessions(Some(login));
+    close_open_sessions(Some(login), points_before);
     let mut data = load_streaks();
     let mut sessions = data
         .get("sessions")
@@ -5172,7 +5179,7 @@ fn main() {
                 start_streak_scheduler(app.handle().clone());
                 {
                     let _guard = STREAK_DATA.lock().unwrap();
-                    close_open_sessions(None);
+                    close_open_sessions(None, None);
                 }
             }
             // Иконка в трее: свернуть в трей и выйти
