@@ -1192,6 +1192,12 @@ function updateBlock() {
     </div>`;
 }
 
+function shortMinutes(value) {
+  const number = Number(value) || 0;
+  if (Number.isInteger(number)) return String(number);
+  return number.toFixed(1);
+}
+
 function streakSheet() {
   const streak = state.snapshot.streak ?? {};
   const channels = streak.channels ?? [];
@@ -1248,7 +1254,7 @@ function streakSheet() {
           <span>${hasAfter ? after.toLocaleString('ru-RU') : '—'}</span>
           ${delta !== null ? `<b class="${delta > 449 ? 'gain' : delta > 0 ? 'plus' : ''}">${delta > 0 ? '+' : ''}${delta}</b>` : ''}
         </div>
-        <div class="streak-sheet-dur">${session.unlimited ? '∞' : minutes + ' мин'}${Number(session.chestsClaimed) > 0 ? ' · +' + session.chestsClaimed : ''}</div>
+        <div class="streak-sheet-dur">${session.unlimited ? '∞' : shortMinutes(minutes) + ' мин'}${Number(session.chestsClaimed) > 0 ? ' · +' + session.chestsClaimed : ''}</div>
         ${session.gained ? '<span class="streak-sheet-gain">серия</span>' : ''}
       </div>`;
   }).join('');
@@ -1393,7 +1399,7 @@ function streaksView() {
       </div>
       <button class="streak-stop" data-action="streak-stop" ${active ? '' : 'disabled'}>Стоп</button>
       ${active
-        ? `<div class="streak-active"><span class="spinner"></span><span>Смотрю ${esc(active.login)}</span><em>${active.unlimited ? '∞' : `~${active.minutes} мин`}</em></div>`
+        ? `<div class="streak-active"><span class="spinner"></span><span>Смотрю ${esc(active.login)}</span><em>${active.unlimited ? '∞' : `~${shortMinutes(active.minutes)} мин`}</em></div>`
         : `<div class="streak-idle">${online ? `${online} ${online === 1 ? 'канал' : 'каналов'} в эфире` : 'Никто из подписок не в эфире'}</div>`}
     </div>
   </div>

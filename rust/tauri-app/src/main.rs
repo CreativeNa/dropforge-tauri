@@ -1920,6 +1920,7 @@ static STREAK_CHILD: Mutex<Option<Child>> = Mutex::new(None);
 static STREAK_ACTIVE: Mutex<Value> = Mutex::new(Value::Null);
 static STREAK_PENDING_AT: Mutex<i64> = Mutex::new(0);
 static STREAK_DATA: Mutex<()> = Mutex::new(());
+static LAST_DURATION_SECS: Mutex<u64> = Mutex::new(0);
 static STATUS: Mutex<Value> = Mutex::new(Value::Null);
 static LOGS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 static DEVICE: Mutex<Value> = Mutex::new(Value::Null);
@@ -2238,6 +2239,35 @@ fn pseudo_random(max: u64) -> u64 {
     nanos % max
 }
 
+fn number_f(value: Option<&Value>, default: f64) -> f64 {
+    match value {
+        Some(Value::Number(number)) => number.as_f64().unwrap_or(default),
+        _ => default,
+    }
+}
+
+fn streak_seconds_bounds() -> (u64, u64) {
+    let cfg = streak_cfg();
+    let min = number_f(cfg.get("minMinutes"), 9.2).max(1.0);
+    let max = number_f(cfg.get("maxMinutes"), 20.0).max(min);
+    (((min * 60.0).round() as u64).max(60), ((max * 60.0).round() as u64).max(60))
+}
+
+fn next_duration_seconds() -> u64 {
+    let (min, max) = streak_seconds_bounds();
+    if max <= min {
+        return min;
+    }
+    let range = max - min + 1;
+    let mut candidate = min + pseudo_random(range);
+    let last = *LAST_DURATION_SECS.lock().unwrap();
+    if last > 0 && candidate.abs_diff(last) < 45 {
+        candidate = min + (candidate - min + 137) % range;
+    }
+    *LAST_DURATION_SECS.lock().unwrap() = candidate;
+    candidate
+}
+
 fn streak_reset_day(data: &mut Value) {
     let date = today();
     let changed = data.get("date").and_then(Value::as_str) != Some(date.as_str());
@@ -2262,8 +2292,8 @@ fn streak_view() -> Value {
     json!({
         "enabled": cfg.get("enabled").and_then(Value::as_bool).unwrap_or(false),
         "dailyLimit": cfg.get("dailyLimit").and_then(Value::as_u64).unwrap_or(5),
-        "minMinutes": cfg.get("minMinutes").and_then(Value::as_u64).unwrap_or(6),
-        "maxMinutes": cfg.get("maxMinutes").and_then(Value::as_u64).unwrap_or(20),
+        "minMinutes": number_f(cfg.get("minMinutes"), 9.2),
+        "maxMinutes": number_f(cfg.get("maxMinutes"), 20.0),
         "delayMaxMinutes": cfg.get("delayMaxMinutes").and_then(Value::as_u64).unwrap_or(7),
         "claimChests": cfg.get("claimChests").and_then(Value::as_bool).unwrap_or(true),
         "active": STREAK_ACTIVE.lock().unwrap().clone(),
@@ -2650,7 +2680,7 @@ fn close_open_sessions(login: Option<&str>, points_after: Option<u64>) {
     }
 }
 
-fn record_session_start(login: &str, started_at: &str, points_before: Option<u64>, minutes: u64, unlimited: bool) {
+fn record_session_start(login: &str, started_at: &str, points_before: Option<u64>, seconds: u64, unlimited: bool) {
     let _guard = STREAK_DATA.lock().unwrap();
     close_open_sessions(Some(login), points_before);
     let mut data = load_streaks();
@@ -2665,7 +2695,8 @@ fn record_session_start(login: &str, started_at: &str, points_before: Option<u64
         "endedAt": Value::Null,
         "pointsBefore": points_before,
         "pointsAfter": Value::Null,
-        "minutes": if unlimited { 0 } else { minutes },
+        "minutes": if unlimited { 0.0 } else { (seconds as f64 / 60.0 * 10.0).round() / 10.0 },
+        "seconds": if unlimited { 0 } else { seconds },
         "unlimited": unlimited,
         "gained": false,
         "chestsClaimed": 0,
@@ -2825,7 +2856,7 @@ fn start_chest_claimer(app: tauri::AppHandle) {
     });
 }
 
-fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &str, minutes: u64) -> Value {
+fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &str, seconds: u64) -> Value {
     if !STREAK_ACTIVE.lock().unwrap().is_null() {
         return json!({ "error": "просмотр уже идёт" });
     }
@@ -2838,9 +2869,9 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
     }
     let user_id = text_of(auth_state().get("userId"));
     let points_before = channel_points(&token, login);
-    let unlimited = minutes == 0;
-    record_session_start(login, &chrono::Utc::now().to_rfc3339(), points_before, minutes, unlimited);
-    let watch_minutes = if unlimited { 10080 } else { minutes };
+    let unlimited = seconds == 0;
+    record_session_start(login, &chrono::Utc::now().to_rfc3339(), points_before, seconds, unlimited);
+    let watch_minutes = if unlimited { 10080 } else { (seconds + 59) / 60 };
     if let Some(mut child) = STREAK_CHILD.lock().unwrap().take() {
         let _ = child.kill();
     }
@@ -2871,12 +2902,14 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
     let until = if unlimited {
         0
     } else {
-        chrono::Utc::now().timestamp() + (minutes as i64) * 60
+        chrono::Utc::now().timestamp() + seconds as i64
     };
+    let display_minutes = if unlimited { 0.0 } else { (seconds as f64 / 60.0 * 10.0).round() / 10.0 };
     *STREAK_ACTIVE.lock().unwrap() = json!({
         "login": login,
         "channelId": channel_id,
-        "minutes": if unlimited { 0 } else { minutes },
+        "minutes": display_minutes,
+        "seconds": if unlimited { 0 } else { seconds },
         "until": until,
         "unlimited": unlimited,
         "pointsBefore": points_before,
@@ -2888,7 +2921,7 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
         if unlimited {
             format!("Стрик: смотрю {login} без ограничения по времени")
         } else {
-            format!("Стрик: смотрю {login} ~{minutes} мин")
+            format!("Стрик: смотрю {login} ~{display_minutes} мин")
         },
     );
     if let Some(handle) = &app {
@@ -2912,7 +2945,7 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
         let handle = app.clone();
         let login_owned = login.to_string();
         std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_secs(minutes * 60));
+            std::thread::sleep(std::time::Duration::from_secs(seconds));
             if let Some(mut child) = STREAK_CHILD.lock().unwrap().take() {
                 let _ = child.kill();
             }
@@ -2921,7 +2954,7 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
         });
     }
 
-    json!({ "ok": true, "login": login, "minutes": minutes, "unlimited": unlimited })
+    json!({ "ok": true, "login": login, "minutes": display_minutes, "seconds": seconds, "unlimited": unlimited })
 }
 
 fn streak_candidates() -> Vec<Value> {
@@ -3000,10 +3033,8 @@ fn start_streak_scheduler(app: tauri::AppHandle) {
         let candidate = &candidates[0];
         let login = text_of(candidate.get("login"));
         let channel_id = text_of(candidate.get("id"));
-        let min = streak_number("minMinutes", 6).max(1);
-        let max = streak_number("maxMinutes", 20).max(min);
-        let minutes = min + pseudo_random(max - min + 1);
-        let result = start_streak_watch(Some(app.clone()), &login, &channel_id, minutes);
+        let seconds = next_duration_seconds();
+        let result = start_streak_watch(Some(app.clone()), &login, &channel_id, seconds);
         let _ = app.emit("log", json!({
             "at": "",
             "level": "info",
@@ -3078,15 +3109,12 @@ fn streak_refresh(app: tauri::AppHandle) -> Value {
 
 #[tauri::command]
 fn streak_watch(app: tauri::AppHandle, login: String, channel_id: String, minutes: Option<u64>) -> Value {
-    let minutes = match minutes {
-        Some(value) => value,
-        None => {
-            let min = streak_number("minMinutes", 6).max(1);
-            let max = streak_number("maxMinutes", 20).max(min);
-            min + pseudo_random(max - min + 1)
-        }
+    let seconds = match minutes {
+        Some(value) if value == 0 => 0,
+        Some(value) => value * 60,
+        None => next_duration_seconds(),
     };
-    start_streak_watch(Some(app), &login, &channel_id, minutes)
+    start_streak_watch(Some(app), &login, &channel_id, seconds)
 }
 
 fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_id: String) {
@@ -4364,7 +4392,7 @@ fn load_settings() -> Value {
             "streakKeeper": {
                 "enabled": false,
                 "dailyLimit": 5,
-                "minMinutes": 6,
+                "minMinutes": 9.2,
                 "maxMinutes": 20,
                 "delayMaxMinutes": 7,
                 "excluded": ["diloindys", "mersufy", "7tvapp", "ravenbtw"],
