@@ -287,7 +287,15 @@ fn diagnostics_report(app: tauri::AppHandle) -> Value {
     lines.push(format!("exe: {}", mask_text(&std::env::current_exe().map(|path| path.display().to_string()).unwrap_or_default())));
     lines.push(format!("data: {}", mask_text(&profile.display().to_string())));
     let exe_dir = std::env::current_exe().ok().and_then(|path| path.parent().map(|dir| dir.to_path_buf())).unwrap_or_default();
-    for name in ["DropForge.exe", "dropforge-tauri.exe", "watcher-svc\\dropforge-watcher-svc.exe", "pubsub-svc\\dropforge-pubsub-svc.exe"] {
+    // DropForge.exe и dropforge-tauri.exe — одно и то же приложение под разными
+    // именами (релизная и dev-сборка), отсутствие второго — норма, а не поломка.
+    for name in ["DropForge.exe", "dropforge-tauri.exe"] {
+        let path = exe_dir.join(name);
+        if let Ok(meta) = std::fs::metadata(&path) {
+            lines.push(format!("file: {name} — {} байт, изменён {}", meta.len(), chrono::DateTime::<chrono::Utc>::from(meta.modified().unwrap_or(std::time::SystemTime::now())).to_rfc3339()));
+        }
+    }
+    for name in ["watcher-svc\\dropforge-watcher-svc.exe", "pubsub-svc\\dropforge-pubsub-svc.exe"] {
         let path = exe_dir.join(name);
         if let Ok(meta) = std::fs::metadata(&path) {
             lines.push(format!("file: {name} — {} байт, изменён {}", meta.len(), chrono::DateTime::<chrono::Utc>::from(meta.modified().unwrap_or(std::time::SystemTime::now())).to_rfc3339()));
@@ -307,9 +315,46 @@ fn diagnostics_report(app: tauri::AppHandle) -> Value {
     lines.push(format!("status: {status}"));
     let child = CHILD.lock().unwrap().as_ref().and_then(|child| child.id().into());
     lines.push(format!("watcher pid: {}", child.map(|pid| pid.to_string()).unwrap_or_else(|| "нет".into())));
+    let pubsub_state = app.state::<MinerState>();
+    let pubsub_status = {
+        let mut guard = pubsub_state.pubsub.lock().unwrap();
+        match guard.as_mut() {
+            Some(child) => match child.try_wait() {
+                Ok(None) => format!("works (pid {})", child.id()),
+                Ok(Some(status)) => format!("exited (code {:?}), watchdog will restart", status.code()),
+                Err(error) => format!("poll error: {error}"),
+            },
+            None => String::from("not running"),
+        }
+    };
+    lines.push(format!("pubsub: {pubsub_status}"));
     let progress = read_json(progress_path()).unwrap_or(Value::Null);
     lines.push(format!("progress.at: {}", text_of(progress.get("at"))));
     lines.push(format!("progress.drops: {}", progress.get("drops").and_then(Value::as_object).map(|map| map.len()).unwrap_or(0)));
+    let pending: Vec<&Value> = progress
+        .get("drops")
+        .and_then(Value::as_object)
+        .map(|drops| {
+            drops
+                .values()
+                .filter(|state| {
+                    let claimed = state.get("isClaimed").and_then(Value::as_bool).unwrap_or(false);
+                    let current = state.get("currentMinutes").and_then(Value::as_f64).unwrap_or(0.0);
+                    let required = state.get("requiredMinutes").and_then(Value::as_f64).unwrap_or(0.0);
+                    !claimed && required > 0.0 && current >= required
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let pending_with_id = pending
+        .iter()
+        .filter(|state| state.get("instanceId").map(|value| !value.is_null()).unwrap_or(false))
+        .count();
+    lines.push(format!(
+        "claims: ready to claim {} (with instance id: {})",
+        pending.len(),
+        pending_with_id
+    ));
     // прогресс по дропам игр из очереди: минуты сейчас / сколько нужно
     if let Some(cache) = read_json(profile_dir().join("catalog-cache.json")) {
         let campaigns = cache.get("campaigns").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -1835,6 +1880,7 @@ static STOPPING: Mutex<bool> = Mutex::new(false);
 static WATCH_GEN: Mutex<u64> = Mutex::new(0);
 static LAST_TICK: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 static WATCHDOG_EVENTS: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
+static PUBSUB_EVENTS: Mutex<Vec<std::time::Instant>> = Mutex::new(Vec::new());
 static CHILD: Mutex<Option<Child>> = Mutex::new(None);
 static STATUS: Mutex<Value> = Mutex::new(Value::Null);
 static LOGS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
@@ -1964,6 +2010,59 @@ fn start_watchdog(app: tauri::AppHandle) {
         let _ = start_miner(Some(app.clone()), &slug);
         *LAST_TICK.lock().unwrap() = Some(std::time::Instant::now());
         let _ = app.emit("state", snapshot_from_profile());
+    });
+}
+
+/// PubSub-процесс мог завершиться сам (падение, закрытый stdin) — поднимаем
+/// его обратно, иначе живые события Twitch пропадают до перезапуска приложения.
+fn start_pubsub_watchdog(app: tauri::AppHandle) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let Some(token) = load_token() else { continue };
+        let user_id = read_json(auth_path())
+            .and_then(|value| value.get("userId").cloned())
+            .map(|value| text_of(Some(&value)))
+            .unwrap_or_default();
+        if user_id.is_empty() {
+            continue;
+        }
+        let state = app.state::<MinerState>();
+        let problem: Option<String> = {
+            let mut guard = state.pubsub.lock().unwrap();
+            match guard.as_mut() {
+                None => Some(String::from("процесс не запущен")),
+                Some(child) => match child.try_wait() {
+                    Ok(None) => None,
+                    Ok(Some(status)) => {
+                        guard.take();
+                        Some(match status.code() {
+                            Some(code) => format!("код {code}"),
+                            None => String::from("завершился"),
+                        })
+                    }
+                    Err(error) => {
+                        guard.take();
+                        Some(format!("ошибка опроса: {error}"))
+                    }
+                },
+            }
+        };
+        let Some(reason) = problem else { continue };
+        let allowed = {
+            let mut events = PUBSUB_EVENTS.lock().unwrap();
+            events.retain(|at| at.elapsed() < std::time::Duration::from_secs(600));
+            if events.len() >= 3 {
+                false
+            } else {
+                events.push(std::time::Instant::now());
+                true
+            }
+        };
+        if !allowed {
+            continue;
+        }
+        push_log("warn", format!("pubsub-svc остановился ({reason}) — перезапускаю"));
+        start_pubsub(app.clone(), state.inner(), token, user_id);
     });
 }
 
@@ -4025,6 +4124,14 @@ fn main() {
     tauri::Builder::default()
         .manage(MinerState { child: Mutex::new(None), pubsub: Mutex::new(None), status: Mutex::new(Value::Null) })
         .setup(|app| {
+            // Поддержка: DropForge.exe --diagnostics печатает отчёт и выходит.
+            if std::env::args().any(|arg| arg == "--diagnostics") {
+                let report = diagnostics_report(app.handle().clone());
+                if let Some(text) = report.get("text").and_then(Value::as_str) {
+                    println!("{text}");
+                }
+                std::process::exit(0);
+            }
             legacy_cleanup();
             {
                 let handle = app.handle().clone();
@@ -4159,6 +4266,7 @@ fn main() {
                 start_pubsub(app.handle().clone(), &app.state::<MinerState>(), token, user_id);
                 start_background(app.handle().clone());
                 start_watchdog(app.handle().clone());
+                start_pubsub_watchdog(app.handle().clone());
                 start_tray_updater(app.handle().clone());
             }
             // Иконка в трее: свернуть в трей и выйти
