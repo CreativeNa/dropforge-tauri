@@ -1998,6 +1998,7 @@ static STREAK_ACTIVE: Mutex<Value> = Mutex::new(Value::Null);
 static STREAK_PENDING_AT: Mutex<i64> = Mutex::new(0);
 static STREAK_DATA: Mutex<()> = Mutex::new(());
 static LAST_DURATION_SECS: Mutex<u64> = Mutex::new(0);
+static STREAK_GEN: Mutex<u64> = Mutex::new(0);
 static STATUS: Mutex<Value> = Mutex::new(Value::Null);
 static LOGS: Mutex<Vec<Value>> = Mutex::new(Vec::new());
 static SETTINGS_ERROR: Mutex<Option<String>> = Mutex::new(None);
@@ -2651,6 +2652,10 @@ fn streak_mark_live(channel_id: &str, live: bool) {
 }
 
 fn stop_streak() {
+    {
+        let mut gen = STREAK_GEN.lock().unwrap();
+        *gen += 1;
+    }
     let active = STREAK_ACTIVE.lock().unwrap().clone();
     if let Some(mut child) = STREAK_CHILD.lock().unwrap().take() {
         let _ = child.kill();
@@ -2958,6 +2963,7 @@ fn start_chest_claimer(app: tauri::AppHandle) {
 
 fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &str, seconds: u64) -> Value {
     if !STREAK_ACTIVE.lock().unwrap().is_null() {
+        log_warn(format!("Стрик: запуск {login} отклонён — просмотр уже идёт"));
         return json!({ "error": "просмотр уже идёт" });
     }
     let Some(exe) = watcher_exe() else {
@@ -2969,6 +2975,11 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
     }
     let user_id = text_of(auth_state().get("userId"));
     let points_before = channel_points(&token, login);
+    let generation = {
+        let mut gen = STREAK_GEN.lock().unwrap();
+        *gen += 1;
+        *gen
+    };
     let unlimited = seconds == 0;
     log_info(format!(
         "Стрик: старт {login} (id {channel_id}), {} c, безлимит={}, баллы до={:?}",
@@ -3055,6 +3066,9 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
                 }
             }
             // вотчер завершился сам: стрим закончился или упал
+            if *STREAK_GEN.lock().unwrap() != generation {
+                return;
+            }
             let active = STREAK_ACTIVE.lock().unwrap().clone();
             if text_of(active.get("login")) == login_for_thread && !active.is_null() {
                 *STREAK_ACTIVE.lock().unwrap() = Value::Null;
@@ -3071,6 +3085,10 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
         let login_owned = login.to_string();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(seconds));
+            if *STREAK_GEN.lock().unwrap() != generation {
+                log_info("Стрик: таймер старой сессии проигнорирован");
+                return;
+            }
             if let Some(mut child) = STREAK_CHILD.lock().unwrap().take() {
                 let _ = child.kill();
             }
