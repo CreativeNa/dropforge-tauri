@@ -821,19 +821,12 @@ function dropsView() {
 
   return `
   <div class="stats-row">
-    <div class="stat"><div class="stat-label">Игры</div><div class="stat-value">${snapshot.stats.games}</div></div>
-    <div class="stat"><div class="stat-label">Дропы</div><div class="stat-value">${snapshot.stats.claimed}<small> / ${snapshot.stats.drops}</small></div></div>
-    <div class="stat"><div class="stat-label">Готовы к выдаче</div><div class="stat-value">${snapshot.stats.claimable}</div></div>
-    <div class="stat"><div class="stat-label">Накоплено</div><div class="stat-value">${formatMinutes(snapshot.stats.minutesEarned)}</div></div>
     <div class="stat" style="margin-left:auto"><div class="stat-label">Обновлено</div><div class="stat-value" style="font-size:13px">${snapshot.lastRefresh ? new Date(snapshot.lastRefresh).toLocaleTimeString('ru-RU') : '—'}</div></div>
   </div>
 
   <div class="tabs" role="tablist">
     <button class="tab ${state.dropsTab === 'global' ? 'active' : ''}" data-action="drops-tab" data-tab="global" role="tab">
       Глобальные <span class="tab-count">${globalCount}</span>
-    </button>
-    <button class="tab ${state.dropsTab === 'local' ? 'active' : ''}" data-action="drops-tab" data-tab="local" role="tab" title="Раздел в разработке" aria-disabled="true">
-      Локальные <span class="tab-count">${localCount}</span>
     </button>
   </div>
 
@@ -1148,11 +1141,6 @@ function badgesView() {
   const claimedCount = badges.filter((badge) => badge.claimed).length;
   const freeLeft = free.filter((badge) => badge.available && !badge.claimed).length;
   return `
-  <div class="stats-row">
-    <div class="stat"><div class="stat-label">Всего</div><div class="stat-value">${badges.length}</div></div>
-    <div class="stat"><div class="stat-label">Получено</div><div class="stat-value">${claimedCount}</div></div>
-    <div class="stat"><div class="stat-label">Бесплатных осталось</div><div class="stat-value">${freeLeft}</div></div>
-  </div>
   ${
     badges.length
       ? group('Бесплатные', free) + group('Платные', paid)
@@ -1709,6 +1697,7 @@ async function withBusy(key, fn) {
 let forceLoggedOut = false;
 
 function applySnapshot(snapshot) {
+  if (state.dropsTab !== 'global') state.dropsTab = 'global';
   // код устройства приходит в снимке — событий WebView может не быть
   if (snapshot?.device?.userCode) {
     state.device = snapshot.device;
