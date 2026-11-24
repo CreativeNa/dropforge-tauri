@@ -3150,7 +3150,12 @@ fn streak_live_delay() -> std::time::Duration {
 fn start_streak_scheduler(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let mut ticks: u64 = 0;
-        let mut next_live = std::time::Instant::now() + streak_live_delay();
+        let first_delay = streak_live_delay();
+        log_info(format!(
+            "Стрик: проверка эфиров каждые 8–10 мин, первая через {:.2} мин",
+            first_delay.as_secs_f64() / 60.0
+        ));
+        let mut next_live = std::time::Instant::now() + first_delay;
         loop {
         std::thread::sleep(std::time::Duration::from_secs(30));
         ticks += 1;
