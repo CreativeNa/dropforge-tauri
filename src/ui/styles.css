@@ -842,18 +842,21 @@ button {
 
 .auth-screen {
   display: grid;
-  grid-template-columns: 1.05fr 1fr;
+  grid-template-columns: minmax(0, 520px) minmax(320px, 372px);
+  justify-content: center;
+  align-items: center;
+  gap: clamp(48px, 8vw, 120px);
   height: 100vh;
+  padding: 24px 40px;
   background: radial-gradient(120% 120% at 15% 0%, #1a1409 0%, #0a0c11 46%);
 }
 
 .auth-left {
-  padding: 60px 56px;
+  padding: 0;
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 26px;
-  border-right: 1px solid var(--line-soft);
 }
 
 .auth-brand {
@@ -914,7 +917,7 @@ button {
 .auth-right {
   display: grid;
   place-items: center;
-  padding: 40px;
+  padding: 0;
 }
 
 .auth-card {
@@ -3263,16 +3266,22 @@ body.sheet-open .content {
 }
 
 .refresh-block {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 5px;
 }
 
 .refresh-time {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
   font-size: 11px;
+  line-height: 1;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .lang-switch {

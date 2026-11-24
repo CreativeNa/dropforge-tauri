@@ -67,6 +67,17 @@ const ICONS = {
 
 let pendingSheetGame = null;
 
+document.addEventListener('toggle', (event) => {
+  const target = event.target;
+  if (target instanceof HTMLDetailsElement && target.classList.contains('auth-advanced')) {
+    state.authAdvanced = target.open;
+  }
+}, true);
+
+document.addEventListener('input', (event) => {
+  if (event.target?.id === 'token') state.authToken = event.target.value;
+}, true);
+
 const state = {
   snapshot: null,
   view: 'drops',
@@ -80,6 +91,8 @@ const state = {
   sheetGame: null,
   busy: new Set(),
   device: null,
+  authAdvanced: false,
+  authToken: '',
   error: null,
   demo: false,
   loading: true,
@@ -420,11 +433,11 @@ function authScreen() {
         </button>
         <p class="auth-note">Подтвердите вход на странице Twitch — приложение получит доступ само, пароль вводить в него не нужно.</p>
         ${device}
-        <details class="auth-advanced">
+        <details class="auth-advanced"${state.authAdvanced ? ' open' : ''}>
           <summary>Вход по токену</summary>
           <div class="field">
             <label for="token">OAuth-токен</label>
-            <input id="token" name="token" placeholder="Вставьте токен из cookie auth-token" autocomplete="off" spellcheck="false" />
+            <input id="token" name="token" value="${esc(state.authToken)}" placeholder="Вставьте токен из cookie auth-token" autocomplete="off" spellcheck="false" />
           </div>
           <button type="submit" class="btn-ghost wide">${ICONS.shield} Войти по токену</button>
         </details>

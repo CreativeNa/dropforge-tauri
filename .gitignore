@@ -11,3 +11,7 @@ shot*.txt
 Thumbs.db
 RELEASE_NOTES_*.md
 
+
+.env
+.env.*
+!.env.example

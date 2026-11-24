@@ -3170,7 +3170,7 @@ fn start_streak_scheduler(app: tauri::AppHandle) {
         ));
         let mut next_live = std::time::Instant::now() + first_delay;
         loop {
-        std::thread::sleep(std::time::Duration::from_secs(30));
+        std::thread::sleep(std::time::Duration::from_secs(90));
         ticks += 1;
         if std::time::Instant::now() >= next_live {
             refresh_streak_live();
