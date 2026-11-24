@@ -1,6 +1,85 @@
 (function () {
   const EN = {
     'Поиск игры': 'Search games',
+    'DropForge — открытый аналог автофарма Twitch Drops. Приложение поддерживает сессию просмотра и следит за прогрессом.':
+      'DropForge is an open-source alternative for Twitch Drops farming. It keeps a watch session running and tracks progress.',
+    'Приложение поддерживает сессию просмотра и следит за прогрессом.': 'It keeps a watch session running and tracks progress.',
+    'Дропы копятся,': 'Drops pile up',
+    'Как только дроп прокнул — он уже ваш.': 'Once a drop unlocks, it is yours.',
+    'Держать вкладки открытыми не нужно.': 'No need to keep tabs open.',
+    'Приложение поддерживает сессию просмотра и следит за прогрессом.': 'The app keeps a watch session and tracks progress.',
+    'пока вы': 'while you',
+    'пока вы заняты': 'while you are busy',
+    'Любая игра с Drops.': 'Any game with Drops.',
+    'Дропы копятся, пока вы заняты другими делами': 'Drops accumulate while you are busy with other things',
+    'Награды забираются автоматически. Как только дроп прокнул — он уже ваш.':
+      'Rewards are claimed automatically. Once a drop unlocks, it is yours.',
+    'Вход только на сайте Twitch. Приложение не спрашивает пароль и не видит его.':
+      'Sign in only on the Twitch website. The app never asks for or sees your password.',
+    'заняты': 'are busy with',
+    'другими делами': 'other things',
+    'Выберите игру — приложение само найдёт стрим с включёнными Drops, посмотрит его за вас и заберёт награды. Держать вкладки открытыми не нужно.':
+      'Pick a game — the app finds a stream with Drops enabled, watches it for you and claims rewards. No need to keep any tabs open.',
+    'Любая игра с Drops. Кампании и прогресс подтягиваются из вашего аккаунта.':
+      'Any game with Drops. Campaigns and progress are pulled from your account.',
+    'Смена стримера на лету. Стрим закончился — приложение переключится само.':
+      'Switches streamer on the fly. When the stream ends, the app moves on by itself.',
+    'Награды забираются автоматически. Как только дроп прокнул — он уже ваш.':
+      'Rewards are claimed automatically. Once a drop unlocks, it is yours.',
+    'Вход только на сайте Twitch. Приложение не спрашивает пароль и не видит его.':
+      'Sign-in happens only on the Twitch website. The app never asks for or sees your password.',
+    'Найдите «Войти» — откроется браузер, где вы уже вошли (или войдёте) на Twitch.':
+      'Press “Sign in” — a browser opens where you are (or will be) signed in to Twitch.',
+    'Войти через Twitch': 'Sign in with Twitch',
+    'Код подтверждения': 'Verification code',
+    'Браузер уже открыт. Если нет —': 'The browser is already open. If not —',
+    'откройте twitch.tv/activate': 'open twitch.tv/activate',
+    'и введите код.': 'and enter the code.',
+    'Вход по токену': 'Sign in with token',
+    'OAuth-токен': 'OAuth token',
+    'Войти по токену': 'Sign in with token',
+    'Вставить токен из cookie auth-token': 'Paste the auth-token cookie value',
+    'Подтверди вход в браузере — профиль сохранится': 'Confirm sign-in in the browser — your profile will be kept',
+    'Приобретите подписку первого уровня или подарочную подписку первого уровня':
+      'Get a Tier 1 subscription or a gifted Tier 1 subscription',
+    'Нужна привязка аккаунта: без неё Twitch не засчитывает минуты.':
+      'Account linking required: without it Twitch does not count watch minutes.',
+    'Награды забираются автоматически.': 'Rewards are claimed automatically.',
+    'В список': 'Add',
+    'В списке': 'Added',
+    'Смотреть Drops': 'Watch Drops',
+    'Проверяйте прогресс на Twitch': 'Track progress on Twitch',
+    'награда за подписку на канал': 'channel subscription reward',
+    'награда уже на аккаунте': 'reward already on your account',
+    'Кампании и прогресс подтягиваются из вашего аккаунта.': 'Campaigns and progress are pulled from your account.',
+    'Бесплатные': 'Free',
+    'Платные': 'Paid',
+    'В эфире': 'Live',
+    'Пока никто из подписок не в эфире. Как только стример начнёт трансляцию, он появится здесь.':
+      'None of your subscriptions is live yet. When a streamer goes live, they will appear here.',
+    'Поиск игры': 'Search games',
+    'Файл:': 'File:',
+    'Раз в 10 минут': 'Every 10 minutes',
+    'Вход выполнен': 'Signed in',
+    'Вход отменён': 'Sign-in cancelled',
+    'Twitch переподключён': 'Twitch reconnected',
+    'Офлайн': 'Offline',
+    'Недоступен': 'Unavailable',
+    'Сейчас недоступен': 'Currently unavailable',
+    'Смотреть': 'Watch',
+    'Фармить': 'Farm',
+    'Остановить': 'Stop',
+    'Продолжить': 'Resume',
+    'На паузе': 'Paused',
+    'Загрузка…': 'Loading…',
+    'Проверить': 'Check',
+    'Сбросить': 'Reset',
+    'Скопировать': 'Copy',
+    'Скопировано': 'Copied',
+    'Закрыть': 'Close',
+    'Сохранить': 'Save',
+    'Обновить': 'Refresh',
+    'Поиск игры': 'Search games',
     'Файл:': 'File:',
     'Раз в 10 минут': 'Every 10 minutes',
     'Найдите игру': 'Find a game',
@@ -241,6 +320,11 @@
   };
 
   const PATTERNS = [
+    [/^(\d+)\/(\d+) дропов · до (.+)$/, '$1/$2 drops · until $3'],
+    [/^эволюция: нужен (.+) — в профиле его нет$/, 'evolution: requires $1 — not in your profile'],
+    [/^Установлена последняя версия \((.+)\)$/, 'You have the latest version ($1)'],
+    [/^Доступна (.+), у вас (.+)$/, '$1 available, you have $2'],
+    [/^Проверяет релизы на GitHub и ставит новую версию сама$/, 'Checks GitHub releases and installs updates automatically'],
     [/^Раз в (\d+) минут(у|ы)?$/, 'Every $1 minutes'],
     [/^(\d+) игр · нажмите на карточку, чтобы увидеть награды$/, '$1 games · click a card to see rewards'],
     [/^(\d+) игр · нажмите на карточку, чтобы увидеть награды\.$/, '$1 games · click a card to see rewards.'],
@@ -294,13 +378,69 @@
     ['авг', 'Aug'], ['сен', 'Sep'], ['окт', 'Oct'], ['ноя', 'Nov'], ['дек', 'Dec'],
   ];
 
+
+  const LOG_PATTERNS = [
+    [/^Запуск DropForge (.+), профиль: (.+)$/, 'Started DropForge $1, profile: $2'],
+    [/^Стрик: подписки загружены \((\d+)\)$/, 'Streaks: subscriptions loaded ($1)'],
+    [/^Стрики: подписки загружены \((\d+)\)$/, 'Streaks: subscriptions loaded ($1)'],
+    [/^Стрик: проверка эфиров — каналов (\d+), в эфире (\d+), серии у (\d+)$/, 'Streaks: live check — $1 channels, $2 live, $3 with streaks'],
+    [/^Стрик: следующая проверка эфиров через ([\d.,]+) мин$/, 'Streaks: next live check in $1 min'],
+    [/^Стрик: проверка эфиров каждые 8–10 мин, первая через ([\d.,]+) мин$/, 'Streaks: live check every 8–10 min, first in $1 min'],
+    [/^Стрик: обновление подписок вручную$/, 'Streaks: manual subscription refresh'],
+    [/^Настройки: (.*)$/, 'Settings: $1'],
+    [/^Обновление: (.*)$/, 'Update: $1'],
+    [/^Диагностика: (.*)$/, 'Diagnostics: $1'],
+    [/^Склад: обновление запущено$/, 'Catalog: refresh started'],
+    [/^Стрик watcher tick: сегментов (\d+), spade (\d+)(.*)$/, 'Streak watcher tick: segments $1, spade $2$3'],
+    [/^Сундук: (\S+) — баланс (\d+), награда есть$/, 'Chest: $1 — balance $2, reward available'],
+    [/^Сундук: (\S+) — баланс (\d+), награда нет$/, 'Chest: $1 — balance $2, no reward'],
+    [/^Стрик: сундук (\S+) \+(\d+) баллов(?: \(множитель ×([\d.]+)\))?$/, 'Streaks: chest $1 +$2 points'],
+    [/^Стрик: старт (\S+) \(id (\d+)\), (\d+) c, безлимит=(true|false), баллы до=Some\((\d+)\)$/, 'Streaks: start $1 (id $2), $3 s, unlimited=$4, points before=$5'],
+    [/^Стрик: смотрю (\S+) без ограничения по времени$/, 'Streaks: watching $1 with no time limit'],
+    [/^Стрик: смотрю (\S+) ~([\d.]+) мин$/, 'Streaks: watching $1 ~$2 min'],
+    [/^Стрик: финиш (\S+), баллы Some\((\d+)\) → Some\((\d+)\), дельта (Some\((-?\d+)\)|None)$/, 'Streaks: finish $1, points $2 → $3, delta $4'],
+    [/^Стрик: просмотр (\S+) завершён( · \+(\d+) баллов)?$/, 'Streaks: watch $1 finished$2'],
+    [/^Стрик: остановка пользователем$/, 'Streaks: stopped by user'],
+    [/^Стрик: (.+) закончил эфир — останавливаю просмотр$/, 'Streaks: $1 went offline — stopping watch'],
+    [/^Стрик: таймер старой сессии проигнорирован$/, 'Streaks: stale session timer ignored'],
+    [/^Стрик: запуск (\S+) отклонён — просмотр уже идёт$/, 'Streaks: start for $1 rejected — a watch is already running'],
+    [/^Фарм: (.*)$/, 'Farm: $1'],
+    [/^Аккаунт: (.*)$/, 'Account: $1'],
+    [/^Вход: (.*)$/, 'Sign-in: $1'],
+    [/^Приложение: (.*)$/, 'App: $1'],
+    [/^Автофарм остановлен$/, 'Autofarm stopped'],
+    [/^Автофарм запущен$/, 'Autofarm started'],
+  ];
+
+  function translateLog(value) {
+    if (lang !== 'en') return value;
+    const text = String(value ?? '');
+    for (const [re, replacement] of LOG_PATTERNS) {
+      if (re.test(text)) {
+        return text
+          .replace(re, replacement)
+          .replace(/· \+(\d+) баллов/g, '· +$1 points')
+          .replace(/(\d+) мин/g, '$1 min')
+          .replace(/баланс/g, 'balance')
+          .replace(/награда/g, 'reward');
+      }
+    }
+    return text;
+  }
+
+  function normalize(value) {
+    return String(value ?? '').replace(/\s+/g, ' ').trim();
+  }
+
+  const EN_NORM = new Map(Object.entries(EN).map(([key, value]) => [normalize(key), value]));
+
   let lang = 'ru';
 
   function translateString(value) {
     if (lang !== 'en') return value;
-    const key = value.trim();
+    const key = normalize(value);
     if (!key) return value;
-    let out = EN[key];
+    let out = EN_NORM.get(key);
     if (!out) {
       for (const [re, replacement] of PATTERNS) {
         if (re.test(key)) {
@@ -320,7 +460,8 @@
       .replace(/(\d+)\s*м(?=\s|$|[.,])/g, '$1 m')
       .replace(/(\d+)\s*игр(?=\s|$|[.,])/g, '$1 games')
       .replace(/(\d+)\s*дропов(?=\s|$|[.,])/g, '$1 drops');
-    return value.replace(key, out);
+    const original = String(value);
+    return original.replace(original.trim(), out);
   }
 
   function localizeAttributes(el) {
@@ -335,6 +476,20 @@
 
   function localize(root) {
     if (lang !== 'en' || !root) return;
+    if (root.querySelectorAll) {
+      for (const el of root.querySelectorAll('p,h1,h2,h3,li')) {
+        if (!el.childElementCount) continue;
+        const text = normalize(el.textContent);
+        let translated = EN_NORM.get(text);
+        if (!translated && /^Найдите .*Войти.*Twitch\.$/.test(text)) {
+          translated = 'Press “Sign in” — a browser opens where you are (or will be) signed in to Twitch.';
+        }
+        if (!translated && /^Любая игра с Drops\..*$/.test(text)) {
+          translated = 'Any game with Drops. Campaigns and progress are pulled from your account.';
+        }
+        if (translated && el.textContent !== translated) el.textContent = translated;
+      }
+    }
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const nodes = [];
     while (walker.nextNode()) nodes.push(walker.currentNode);
@@ -362,6 +517,7 @@
   }
 
   window.dfTranslate = (value) => translateString(String(value ?? ''));
+  window.dfTranslateLog = translateLog;
   window.dfSetLanguage = (next) => {
     lang = next === 'en' ? 'en' : 'ru';
     document.documentElement.lang = lang;

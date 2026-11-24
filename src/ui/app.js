@@ -1151,7 +1151,7 @@ function logsView() {
       (entry) => `
     <div class="log-line ${esc(entry.level)}">
       <span class="log-time">${(() => { const date = new Date(entry.at); return Number.isNaN(date.getTime()) ? '—' : date.toLocaleTimeString('ru-RU'); })()}</span>
-      <span class="log-msg">${esc(entry.message)}</span>
+      <span class="log-msg">${esc(window.dfTranslateLog ? window.dfTranslateLog(entry.message) : entry.message)}</span>
     </div>`,
     )
     .join('');
@@ -1529,8 +1529,8 @@ function settingsView() {
       <div class="row">
         <div class="row-label muted">Язык</div>
         <div class="lang-switch">
-          <button class="lang-btn ${(state.snapshot?.settings?.language ?? 'auto') === 'ru' || ((state.snapshot?.settings?.language ?? 'auto') === 'auto' && state.snapshot?.systemLanguage === 'ru') ? 'active' : ''}" data-action="lang-set" data-lang="ru">RU</button>
-          <button class="lang-btn ${(state.snapshot?.settings?.language ?? 'auto') === 'en' || ((state.snapshot?.settings?.language ?? 'auto') === 'auto' && state.snapshot?.systemLanguage !== 'ru') ? 'active' : ''}" data-action="lang-set" data-lang="en">EN</button>
+          <button class="lang-btn ${state.snapshot?.language === 'ru' ? 'active' : ''}" data-action="lang-set" data-lang="ru">RU</button>
+          <button class="lang-btn ${state.snapshot?.language === 'en' ? 'active' : ''}" data-action="lang-set" data-lang="en">EN</button>
         </div>
       </div>
       <div class="row">
@@ -1923,7 +1923,12 @@ const actions = {
     if (!logs.length) { toast('Журнал пуст', 'error'); return; }
     if (typeof api.copyText !== 'function') { toast('Копирование недоступно', 'error'); return; }
     const text = logs
-      .map((entry) => `${new Date(entry.at).toISOString()} [${entry.level}] ${entry.message}`)
+      .map((entry) => {
+        const date = new Date(entry.at);
+        const at = Number.isNaN(date.getTime()) ? '' : date.toISOString() + ' ';
+        const message = window.dfTranslateLog ? window.dfTranslateLog(entry.message) : entry.message;
+        return `${at}[${entry.level}] ${message}`;
+      })
       .join('\n');
     const result = await api.copyText(text);
     toast(result?.ok ? 'Журнал скопирован' : 'Не удалось скопировать', result?.ok ? 'info' : 'error');
@@ -2307,6 +2312,12 @@ async function boot() {
         state.buildFingerprint = info?.build ?? null;
         state.buildDate = info?.builtAt ?? null;
         if (state.view === 'settings') render();
+      })
+      .catch(() => {});
+
+    (api.appLanguage ? api.appLanguage() : Promise.resolve(null))
+      .then((info) => {
+        if (info?.language && window.dfSetLanguage) window.dfSetLanguage(info.language);
       })
       .catch(() => {});
   }

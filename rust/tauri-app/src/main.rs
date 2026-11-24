@@ -603,10 +603,23 @@ fn logs_open() -> Value {
     if !path.exists() {
         return json!({ "ok": false, "error": "журнал ещё пуст" });
     }
-    let mut explore = Command::new("explorer");
-    explore.arg(format!("/select,\"{}\"", path.display()));
-    hide_console(&mut explore);
-    let _ = explore.spawn();
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+        use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+        let operation: Vec<u16> = "open\0".encode_utf16().collect();
+        let target: Vec<u16> = format!("{}\0", path.display()).encode_utf16().collect();
+        unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                operation.as_ptr(),
+                target.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                SW_SHOWNORMAL,
+            );
+        }
+    }
     json!({ "ok": true })
 }
 
@@ -5232,6 +5245,14 @@ fn exe_fingerprint() -> (String, String) {
 }
 
 #[tauri::command]
+fn app_language() -> Value {
+    json!({
+        "language": effective_language(&load_settings()),
+        "system": system_language(),
+    })
+}
+
+#[tauri::command]
 fn app_version() -> Value {
     let (build, built_at) = exe_fingerprint();
     json!({ "app": env!("CARGO_PKG_VERSION"), "electron": null, "build": build, "builtAt": built_at })
@@ -5716,6 +5737,7 @@ fn main() {
             farm_start,
             farm_stop,
             app_version,
+            app_language,
             app_data_dir,
             shell_open,
             diagnostics_report,
