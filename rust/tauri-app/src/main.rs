@@ -2307,6 +2307,23 @@ fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
 }
 
+fn system_language() -> String {
+    let code = reg_value(
+        "SYSTEM\\CurrentControlSet\\Control\\Nls\\Language",
+        "InstallLanguage",
+    )
+    .unwrap_or_default();
+    if code == "0419" { "ru".to_string() } else { "en".to_string() }
+}
+
+fn effective_language(settings: &Value) -> String {
+    match text_of(settings.get("language")).as_str() {
+        "ru" => "ru".to_string(),
+        "en" => "en".to_string(),
+        _ => system_language(),
+    }
+}
+
 fn pseudo_random(max: u64) -> u64 {
     if max == 0 {
         return 0;
@@ -3123,14 +3140,28 @@ fn streak_candidates() -> Vec<Value> {
         .unwrap_or_default()
 }
 
+fn streak_live_delay() -> std::time::Duration {
+    // 8–10 минут с точностью до миллисекунд, каждый раз новое значение
+    let min_ms: u64 = 8 * 60 * 1000;
+    let span_ms: u64 = 2 * 60 * 1000;
+    std::time::Duration::from_millis(min_ms + pseudo_random(span_ms))
+}
+
 fn start_streak_scheduler(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let mut ticks: u64 = 0;
+        let mut next_live = std::time::Instant::now() + streak_live_delay();
         loop {
         std::thread::sleep(std::time::Duration::from_secs(30));
         ticks += 1;
-        if ticks % 10 == 0 {
+        if std::time::Instant::now() >= next_live {
             refresh_streak_live();
+            let delay = streak_live_delay();
+            log_info(format!(
+                "Стрик: следующая проверка эфиров через {:.2} мин",
+                delay.as_secs_f64() / 60.0
+            ));
+            next_live = std::time::Instant::now() + delay;
             let _ = app.emit("state", snapshot_from_profile());
         }
         if !streak_flag("enabled", false) {
@@ -4481,6 +4512,8 @@ fn snapshot_from_profile() -> Value {
         },
         "status": status_value(),
         "settingsError": SETTINGS_ERROR.lock().unwrap().clone(),
+        "systemLanguage": system_language(),
+        "language": effective_language(&load_settings()),
         "pubsub": "offline",
         "streak": streak_view(),
         "lastRefresh": cache.get("at"),
@@ -4621,6 +4654,7 @@ fn load_settings() -> Value {
             "refreshMinutes": 10,
             "priorityMode": "ending-soonest",
             "resumeMinutes": 15,
+            "language": "auto",
             "streakKeeper": {
                 "enabled": false,
                 "dailyLimit": 5,

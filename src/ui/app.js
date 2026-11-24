@@ -626,9 +626,12 @@ function topbar() {
 
   const refresh =
     state.view === 'drops'
-      ? `<button class="btn-ghost" data-action="refresh" ${isBusy('refresh') ? 'disabled' : ''}>
-           ${isBusy('refresh') ? '<span class="spinner"></span>' : ICONS.refresh} Обновить
-         </button>`
+      ? `<div class="refresh-block">
+           <button class="btn-ghost" data-action="refresh" ${isBusy('refresh') ? 'disabled' : ''}>
+             ${isBusy('refresh') ? '<span class="spinner"></span>' : ICONS.refresh} Обновить
+           </button>
+           <div class="refresh-time">Обновлено ${snapshot.lastRefresh ? new Date(snapshot.lastRefresh).toLocaleTimeString('ru-RU') : '—'}</div>
+         </div>`
       : '';
 
   return `
@@ -820,16 +823,6 @@ function dropsView() {
     : 0;
 
   return `
-  <div class="stats-row">
-    <div class="stat" style="margin-left:auto"><div class="stat-label">Обновлено</div><div class="stat-value" style="font-size:13px">${snapshot.lastRefresh ? new Date(snapshot.lastRefresh).toLocaleTimeString('ru-RU') : '—'}</div></div>
-  </div>
-
-  <div class="tabs" role="tablist">
-    <button class="tab ${state.dropsTab === 'global' ? 'active' : ''}" data-action="drops-tab" data-tab="global" role="tab">
-      Глобальные <span class="tab-count">${globalCount}</span>
-    </button>
-  </div>
-
   ${catalogNotice(snapshot)}
 
   ${local ? localSection() : `<div id="games-section">${gamesSection()}</div>`}`;
@@ -1534,6 +1527,13 @@ function settingsView() {
         <div class="mono muted" id="app-version">${esc(state.appVersion ?? '—')}</div>
       </div>
       <div class="row">
+        <div class="row-label muted">Язык</div>
+        <div class="lang-switch">
+          <button class="lang-btn ${(state.snapshot?.settings?.language ?? 'auto') === 'ru' || ((state.snapshot?.settings?.language ?? 'auto') === 'auto' && state.snapshot?.systemLanguage === 'ru') ? 'active' : ''}" data-action="lang-set" data-lang="ru">RU</button>
+          <button class="lang-btn ${(state.snapshot?.settings?.language ?? 'auto') === 'en' || ((state.snapshot?.settings?.language ?? 'auto') === 'auto' && state.snapshot?.systemLanguage !== 'ru') ? 'active' : ''}" data-action="lang-set" data-lang="en">EN</button>
+        </div>
+      </div>
+      <div class="row">
         <div class="row-label muted">Сборка</div>
         <div class="mono muted" style="text-align:right">
           ${esc(state.buildFingerprint ?? '—')}
@@ -1698,6 +1698,7 @@ let forceLoggedOut = false;
 
 function applySnapshot(snapshot) {
   if (state.dropsTab !== 'global') state.dropsTab = 'global';
+  if (window.dfSetLanguage && snapshot.language) window.dfSetLanguage(snapshot.language);
   // код устройства приходит в снимке — событий WebView может не быть
   if (snapshot?.device?.userCode) {
     state.device = snapshot.device;
@@ -1902,6 +1903,18 @@ const actions = {
     } finally {
       state.busy.delete('diagnostics');
       render();
+    }
+  },
+
+  async 'lang-set'(el) {
+    const lang = el?.dataset?.lang === 'en' ? 'en' : 'ru';
+    try {
+      const snapshot = await api.saveSettings({ language: lang });
+      applySnapshot(snapshot);
+      if (window.dfSetLanguage) window.dfSetLanguage(lang);
+      toast(lang === 'en' ? 'Language: English' : 'Язык: русский');
+    } catch (error) {
+      toast('Язык: ' + error.message, 'error');
     }
   },
 
