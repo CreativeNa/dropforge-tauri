@@ -57,6 +57,24 @@ fn read_json(path: PathBuf) -> Option<Value> {
     serde_json::from_str(text).ok()
 }
 
+/// Запись через временный файл и rename: обрыв посреди записи (крах, выключение, чтение
+/// в этот момент другим потоком) не оставит обрезанный JSON, который `load_*` принял бы за
+/// пустое состояние и затёр бы настоящее. Если rename не удался — пишем напрямую, как раньше.
+fn write_atomic(path: impl AsRef<std::path::Path>, contents: impl AsRef<[u8]>) -> std::io::Result<()> {
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let path = path.as_ref();
+    let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut name = path.file_name().map(|value| value.to_os_string()).unwrap_or_default();
+    name.push(format!(".{}.{}.tmp", std::process::id(), n));
+    let tmp = path.with_file_name(name);
+    let staged = std::fs::write(&tmp, contents.as_ref()).and_then(|_| std::fs::rename(&tmp, path));
+    if staged.is_ok() {
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(path, contents.as_ref())
+}
+
 fn text_of(value: Option<&Value>) -> String {
     match value {
         None => String::new(),
@@ -1640,7 +1658,9 @@ fn store_avatar(url: &str) {
     let Some(mut payload) = read_json(auth_path()) else { return };
     if let Some(object) = payload.as_object_mut() {
         object.insert("avatarUrl".into(), json!(url));
-        let _ = std::fs::write(auth_path(), serde_json::to_string_pretty(&payload).unwrap_or_default());
+        if let Ok(text) = serde_json::to_string_pretty(&payload) {
+            let _ = write_atomic(auth_path(), text);
+        }
     }
 }
 
@@ -1655,13 +1675,15 @@ fn save_token(token: &str) -> Option<(String, String)> {
         "savedAt": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|span| span.as_secs()).unwrap_or(0),
     });
     std::fs::create_dir_all(profile_dir()).ok();
-    std::fs::write(auth_path(), serde_json::to_string_pretty(&payload).ok()?).ok()?;
+    write_atomic(auth_path(), serde_json::to_string_pretty(&payload).ok()?).ok()?;
     let login_for_avatar = text_of(payload.get("login"));
     if let Some(avatar) = fetch_avatar(token, &login_for_avatar) {
         if let Some(object) = payload.as_object_mut() {
             object.insert("avatarUrl".into(), json!(avatar));
         }
-        let _ = std::fs::write(auth_path(), serde_json::to_string_pretty(&payload).unwrap_or_default());
+        if let Ok(text) = serde_json::to_string_pretty(&payload) {
+            let _ = write_atomic(auth_path(), text);
+        }
     }
     // Кэш авторизации мог запомнить пустое состояние до входа — обновляем его.
     set_auth_state(payload.clone());
@@ -2298,7 +2320,16 @@ fn load_streaks() -> Value {
 }
 
 fn save_streaks(value: &Value) {
-    let _ = std::fs::write(streak_path(), serde_json::to_string_pretty(value).unwrap_or_default());
+    let text = match serde_json::to_string_pretty(value) {
+        Ok(text) => text,
+        Err(error) => {
+            log_warn(format!("Стрик: не удалось сериализовать streaks.json: {error}"));
+            return;
+        }
+    };
+    if let Err(error) = write_atomic(streak_path(), text) {
+        log_warn(format!("Стрик: не удалось сохранить streaks.json: {error}"));
+    }
 }
 
 fn streak_cfg() -> Value {
@@ -2577,6 +2608,10 @@ fn refresh_follows() -> Result<usize, String> {
     if edges.is_empty() {
         return Err("не удалось получить подписки: нужен повторный вход со скоупом user:read:follows".into());
     }
+    // чтение-правка-запись streaks.json — под STREAK_DATA, сеть уже позади; иначе параллельное
+    // закрытие сессии или отметка эфира терялись перезаписью. Снимаем до refresh_streak_live,
+    // который берёт ту же блокировку сам.
+    let streak_guard = STREAK_DATA.lock().unwrap();
     let mut data = load_streaks();
     let existing: Vec<Value> = data
         .get("channels")
@@ -2631,6 +2666,7 @@ fn refresh_follows() -> Result<usize, String> {
     data["channels"] = json!(channels);
     data["updatedAt"] = json!(chrono::Utc::now().to_rfc3339());
     save_streaks(&data);
+    drop(streak_guard);
     log_info(format!("Стрик: подписки загружены ({})", channels_len(&data)));
     refresh_streak_live();
     Ok(channels_len(&data))
@@ -2681,7 +2717,9 @@ fn streak_mark_live(channel_id: &str, live: bool) {
     }
 }
 
-fn stop_streak() {
+/// Быстрая часть остановки: гасим вотчер и снимаем активную сессию.
+/// Возвращает (логин, баллы до) — сетевую часть делает вызывающий.
+fn stop_streak_fast() -> Option<(String, Option<u64>)> {
     {
         let mut gen = STREAK_GEN.lock().unwrap();
         *gen += 1;
@@ -2693,8 +2731,15 @@ fn stop_streak() {
     *STREAK_ACTIVE.lock().unwrap() = Value::Null;
     *STREAK_PENDING_AT.lock().unwrap() = 0;
     let login = text_of(active.get("login"));
-    if !login.is_empty() {
-        let points_before = active.get("pointsBefore").and_then(Value::as_u64);
+    if login.is_empty() {
+        None
+    } else {
+        Some((login, active.get("pointsBefore").and_then(Value::as_u64)))
+    }
+}
+
+fn stop_streak() {
+    if let Some((login, points_before)) = stop_streak_fast() {
         finish_streak_session(&login, points_before, None);
     }
 }
@@ -2714,25 +2759,42 @@ fn channel_points(token: &str, login: &str) -> Option<u64> {
         .and_then(Value::as_u64)
 }
 
-fn finish_streak_session(login: &str, points_before: Option<u64>, app: Option<tauri::AppHandle>) {
-    let _guard = STREAK_DATA.lock().unwrap();
-    // уже закрыта другим потоком — ничего не делаем и не пишем дубль в журнал
-    let open = load_streaks()
+// вызывать под STREAK_DATA: startedAt последней открытой (без endedAt) сессии канала
+fn streak_open_session_started(login: &str) -> Option<String> {
+    load_streaks()
         .get("sessions")
         .and_then(Value::as_array)
-        .map(|items| items.iter().any(|session| {
+        .and_then(|items| items.iter().rev().find(|session| {
             text_of(session.get("login")) == login
                 && session.get("endedAt").map(Value::is_null).unwrap_or(false)
         }))
-        .unwrap_or(false);
-    if !open {
+        .map(|session| text_of(session.get("startedAt")))
+}
+
+fn finish_streak_session(login: &str, points_before: Option<u64>, app: Option<tauri::AppHandle>) {
+    // уже закрыта другим потоком — ничего не делаем и не пишем дубль в журнал;
+    // проверка под блокировкой (файл пишется не атомарно), startedAt — чтобы после сети
+    // не закрыть новую сессию того же канала вместо этой
+    let started_at = {
+        let _guard = STREAK_DATA.lock().unwrap();
+        streak_open_session_started(login)
+    };
+    let Some(started_at) = started_at else {
         return;
-    }
+    };
+    // сетевые запросы (до 2×20 с + пауза) идут БЕЗ блокировки STREAK_DATA, иначе на это
+    // время встают события PubSub (stream-up/down), планировщик и обновление списка
     let token = load_token().unwrap_or_default();
     let mut points_after = channel_points(&token, login);
     if points_after.is_none() && !token.is_empty() {
         std::thread::sleep(std::time::Duration::from_millis(700));
         points_after = channel_points(&token, login);
+    }
+    let _guard = STREAK_DATA.lock().unwrap();
+    // за время запросов сессию мог закрыть другой поток (таймер и вотчер сходятся здесь),
+    // а для того же канала — открыться новая; закрываем только ту же самую сессию
+    if streak_open_session_started(login).as_deref() != Some(started_at.as_str()) {
+        return;
     }
     let delta = match (points_before, points_after) {
         (Some(before), Some(after)) if after > before => Some(after - before),
@@ -3255,10 +3317,18 @@ fn restart_pubsub(app: &tauri::AppHandle) {
 }
 
 #[tauri::command]
-fn streak_stop(app: tauri::AppHandle) -> Value {
+async fn streak_stop(app: tauri::AppHandle) -> Value {
     log_info("Стрик: остановка пользователем");
-    stop_streak();
+    // вотчер гасим сразу, а запрос баллов (до 2×20 с) уводим из UI-потока:
+    // иначе окно замирает на всё время остановки просмотра
+    let pending = stop_streak_fast();
     let _ = app.emit("state", snapshot_from_profile());
+    if let Some((login, points_before)) = pending {
+        let handle = app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            finish_streak_session(&login, points_before, Some(handle));
+        });
+    }
     streak_view()
 }
 
@@ -3284,9 +3354,11 @@ fn streak_settings_save(app: tauri::AppHandle, patch: Value) -> Value {
 }
 
 #[tauri::command]
-fn streak_refresh(app: tauri::AppHandle) -> Value {
+async fn streak_refresh(app: tauri::AppHandle) -> Value {
     log_info("Стрик: обновление подписок вручную");
-    let result = refresh_follows();
+    let result = tauri::async_runtime::spawn_blocking(refresh_follows)
+        .await
+        .unwrap_or_else(|_| Err("не удалось обновить подписки".to_string()));
     if result.is_ok() {
         restart_pubsub(&app);
     }
@@ -3306,14 +3378,17 @@ fn streak_refresh(app: tauri::AppHandle) -> Value {
 }
 
 #[tauri::command]
-fn streak_watch(app: tauri::AppHandle, login: String, channel_id: String, minutes: Option<u64>) -> Value {
+async fn streak_watch(app: tauri::AppHandle, login: String, channel_id: String, minutes: Option<u64>) -> Value {
     log_info(format!("Стрик: ручной запуск {login}, минуты={minutes:?}"));
     let seconds = match minutes {
         Some(value) if value == 0 => 0,
         Some(value) => value * 60,
         None => next_duration_seconds(),
     };
-    start_streak_watch(Some(app), &login, &channel_id, seconds)
+    // старт делает запрос баллов «до» — не держим на нём UI-поток
+    tauri::async_runtime::spawn_blocking(move || start_streak_watch(Some(app), &login, &channel_id, seconds))
+        .await
+        .unwrap_or_else(|_| json!({ "error": "не удалось запустить просмотр" }))
 }
 
 fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_id: String) {
@@ -4619,7 +4694,7 @@ fn record_watch_progress(slug: &str, drop_id: &str, minutes: f64) {
         );
     }
     if let Ok(text) = serde_json::to_string(&progress) {
-        let _ = std::fs::write(progress_path(), text);
+        let _ = write_atomic(progress_path(), text);
     }
 }
 
@@ -4634,7 +4709,9 @@ fn save_farm_state(running: bool, game: &str, channel: &str) {
         "channel": channel,
         "at": chrono::Utc::now().to_rfc3339(),
     });
-    let _ = std::fs::write(farm_state_path(), serde_json::to_string(&payload).unwrap_or_default());
+    if let Ok(text) = serde_json::to_string(&payload) {
+        let _ = write_atomic(farm_state_path(), text);
+    }
 }
 
 fn settings_path() -> PathBuf {
@@ -4687,7 +4764,7 @@ fn load_settings() -> Value {
 
 fn save_settings(value: &Value) -> Result<(), String> {
     std::fs::create_dir_all(profile_dir()).ok();
-    std::fs::write(
+    write_atomic(
         settings_path(),
         serde_json::to_string_pretty(value).map_err(|error| error.to_string())?,
     )
@@ -5784,4 +5861,61 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_atomic;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("dropforge-test-{}-{}", name, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn write_atomic_creates_and_replaces_without_leftovers() {
+        let dir = temp_dir("replace");
+        let file = dir.join("streaks.json");
+        write_atomic(&file, "{\"a\":1}").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"a\":1}");
+        write_atomic(&file, "{\"a\":2,\"b\":\"кириллица\"}").unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "{\"a\":2,\"b\":\"кириллица\"}");
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(names.len(), 1, "остались временные файлы: {names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_atomic_concurrent_writers_leave_valid_content() {
+        let dir = temp_dir("concurrent");
+        let file = dir.join("settings.json");
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let file = file.clone();
+                std::thread::spawn(move || {
+                    for j in 0..40 {
+                        let text = format!("{{\"writer\":{i},\"n\":{j},\"pad\":\"{}\"}}", "x".repeat(2000));
+                        write_atomic(&file, text).unwrap();
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        let text = std::fs::read_to_string(&file).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).expect("итоговый файл — валидный JSON");
+        assert!(value.get("writer").is_some());
+        let leftovers = std::fs::read_dir(&dir).unwrap().count();
+        assert_eq!(leftovers, 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_atomic_falls_back_when_target_dir_missing_reports_error() {
+        let dir = temp_dir("missing").join("no-such-subdir");
+        assert!(write_atomic(dir.join("x.json"), "{}").is_err());
+    }
 }
