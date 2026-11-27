@@ -1287,6 +1287,44 @@ fn refresh_progress() -> Result<Value, String> {
     Ok(payload)
 }
 
+/// Убирает из очереди игры, у которых больше нет активных кампаний:
+/// иначе у завершившихся дропсов остаётся «призрак» в настройках навсегда.
+fn prune_queue(campaigns: &[Value]) {
+    let mut active: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for campaign in campaigns {
+        let slug = text_of(campaign.get("game").and_then(|game| game.get("slug")));
+        if !slug.is_empty() {
+            active.insert(slug);
+        }
+    }
+    let mut settings = load_settings();
+    let queued: Vec<String> = settings
+        .get("games")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().map(|item| text_of(Some(item))).collect())
+        .unwrap_or_default();
+    let stale: Vec<String> = queued
+        .iter()
+        .filter(|slug| !slug.is_empty() && !active.contains(*slug))
+        .cloned()
+        .collect();
+    if stale.is_empty() {
+        return;
+    }
+    let kept: Vec<String> = queued
+        .into_iter()
+        .filter(|slug| !stale.contains(slug))
+        .collect();
+    settings["games"] = json!(kept);
+    let _ = save_settings(&settings);
+    for slug in stale {
+        push_log(
+            "info",
+            format!("Очередь: {slug} убрана — активных кампаний больше нет"),
+        );
+    }
+}
+
 fn refresh_catalog() -> Result<Value, String> {
     if !is_logged_in() {
         return Err("нет активного входа".to_string());
@@ -1413,6 +1451,8 @@ fn refresh_catalog() -> Result<Value, String> {
         .map(|span| span.as_secs())
         .unwrap_or(0);
     let _ = at;
+    // каталог только что пришёл из сети — можно почистить очередь от завершившихся игр
+    prune_queue(&campaigns);
     let cache = json!({ "at": chrono::Utc::now().to_rfc3339(), "campaigns": campaigns });
     let dir = profile_dir();
     std::fs::create_dir_all(&dir).ok();
