@@ -1309,6 +1309,16 @@ fn refresh_progress() -> Result<Value, String> {
 
 /// Убирает из очереди игры, у которых больше нет активных кампаний:
 /// иначе у завершившихся дропсов остаётся «призрак» в настройках навсегда.
+fn campaign_ends_at(campaign: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    ["endAt", "endsAt"].iter().find_map(|key| {
+        campaign
+            .get(*key)
+            .and_then(Value::as_str)
+            .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+            .map(|at| at.with_timezone(&chrono::Utc))
+    })
+}
+
 fn prune_queue(campaigns: &[Value]) {
     let mut active: std::collections::HashSet<String> = std::collections::HashSet::new();
     for campaign in campaigns {
@@ -1323,9 +1333,28 @@ fn prune_queue(campaigns: &[Value]) {
         .and_then(Value::as_array)
         .map(|items| items.iter().map(|item| text_of(Some(item))).collect())
         .unwrap_or_default();
+    // Каталог мог прийти неполным (сеть, пагинация, регион). Удаляем игру только
+    // если в прошлом кеше у неё были кампании и все они уже закончились; иначе
+    // отсутствие в текущем ответе ничего не доказывает — очередь не трогаем.
+    let previous: Vec<Value> = read_json(profile_dir().join("catalog-cache.json"))
+        .and_then(|cache| cache.get("campaigns").and_then(Value::as_array).cloned())
+        .unwrap_or_default();
+    let now = chrono::Utc::now();
     let stale: Vec<String> = queued
         .iter()
         .filter(|slug| !slug.is_empty() && !active.contains(*slug))
+        .filter(|slug| {
+            let known: Vec<&Value> = previous
+                .iter()
+                .filter(|campaign| {
+                    text_of(campaign.get("game").and_then(|game| game.get("slug"))) == **slug
+                })
+                .collect();
+            !known.is_empty()
+                && known.iter().all(|campaign| {
+                    campaign_ends_at(campaign).map(|end| end <= now).unwrap_or(false)
+                })
+        })
         .cloned()
         .collect();
     if stale.is_empty() {
@@ -2687,17 +2716,9 @@ fn refresh_follows() -> Result<usize, String> {
         .cloned()
         .unwrap_or_default();
     let mut channels: Vec<Value> = Vec::new();
-    let excluded: Vec<String> = streak_cfg()
-        .get("excluded")
-        .and_then(Value::as_array)
-        .map(|items| items.iter().map(|item| text_of(Some(item)).to_lowercase()).collect())
-        .unwrap_or_default();
     for edge in edges {
         let Some(node) = edge.get("node") else { continue };
         let login = text_of(node.get("login"));
-        if excluded.iter().any(|item| item == &login.to_lowercase()) {
-            continue;
-        }
         let id = text_of(node.get("id"));
         if login.is_empty() || id.is_empty() {
             continue;
@@ -2719,13 +2740,6 @@ fn refresh_follows() -> Result<usize, String> {
         }));
     }
     streak_reset_day(&mut data);
-    let channels: Vec<Value> = channels
-        .into_iter()
-        .filter(|item| {
-            let login = text_of(item.get("login")).to_lowercase();
-            !excluded.iter().any(|name| name == &login)
-        })
-        .collect();
     data["channels"] = json!(channels);
     data["updatedAt"] = json!(chrono::Utc::now().to_rfc3339());
     save_streaks(&data);
@@ -3054,58 +3068,100 @@ fn close_open_sessions(login: Option<&str>, points_after: Option<u64>) {
 /// спрашиваем Twitch один раз. Так в истории вместо прочерка появляется прирост.
 fn backfill_session_points(app: Option<tauri::AppHandle>) {
     let Some(token) = load_token() else { return };
+    struct Planned {
+        login: String,
+        started_at: String,
+        points: Option<u64>,
+    }
+    let mut planned: Vec<Planned> = Vec::new();
+    let mut fetch_logins: Vec<String> = Vec::new();
+    // Первый проход только читает файл: сетевые запросы нельзя делать под STREAK_DATA,
+    // иначе на время ответа Twitch встают PubSub, таймеры и закрытие сессий.
+    {
+        let _guard = STREAK_DATA.lock().unwrap();
+        let data = load_streaks();
+        let sessions = data
+            .get("sessions")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        for (index, session) in sessions.iter().enumerate() {
+            let ended = session
+                .get("endedAt")
+                .map(|value| !value.is_null())
+                .unwrap_or(false);
+            let missing = session
+                .get("pointsAfter")
+                .map(Value::is_null)
+                .unwrap_or(true);
+            if !ended || !missing {
+                continue;
+            }
+            let login = text_of(session.get("login"));
+            if login.is_empty() {
+                continue;
+            }
+            let next = sessions[index + 1..]
+                .iter()
+                .find(|next| text_of(next.get("login")) == login)
+                .and_then(|next| next.get("pointsBefore").and_then(Value::as_u64));
+            if next.is_none() && !fetch_logins.iter().any(|name| name == &login) {
+                fetch_logins.push(login.clone());
+            }
+            planned.push(Planned {
+                login,
+                started_at: text_of(session.get("startedAt")),
+                points: next,
+            });
+        }
+    }
+    if planned.is_empty() {
+        return;
+    }
+    let mut fetched: Vec<(String, u64)> = Vec::new();
+    for login in fetch_logins.iter().take(5) {
+        if let Some(value) = channel_points(&token, login) {
+            fetched.push((login.clone(), value));
+        }
+    }
+    let _guard = STREAK_DATA.lock().unwrap();
     let mut data = load_streaks();
     let mut sessions = data
         .get("sessions")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if sessions.is_empty() {
-        return;
-    }
     let mut changed = false;
-    let mut fetched = 0usize;
-    for index in 0..sessions.len() {
-        let ended = sessions[index]
-            .get("endedAt")
-            .map(|value| !value.is_null())
-            .unwrap_or(false);
-        let missing = sessions[index]
-            .get("pointsAfter")
-            .map(Value::is_null)
-            .unwrap_or(true);
-        if !ended || !missing {
-            continue;
-        }
-        let login = text_of(sessions[index].get("login"));
-        if login.is_empty() {
-            continue;
-        }
-        let before = sessions[index].get("pointsBefore").and_then(Value::as_u64);
-        let next = sessions[index + 1..]
-            .iter()
-            .find(|session| text_of(session.get("login")) == login)
-            .and_then(|session| session.get("pointsBefore").and_then(Value::as_u64));
-        let points = match next {
+    for target in planned {
+        let points = match target.points {
             Some(value) => Some(value),
-            None if fetched < 5 => {
-                fetched += 1;
-                channel_points(&token, &login)
-            }
-            None => None,
+            None => fetched
+                .iter()
+                .find(|(login, _)| login == &target.login)
+                .map(|(_, value)| *value),
         };
+        let Some(value) = points else { continue };
+        // сессию могли закрыть/дописать, пока шли запросы: ищем ту же самую по
+        // логину и времени старта и заполняем только если она всё ещё без баланса
+        let Some(session) = sessions.iter_mut().find(|session| {
+            text_of(session.get("login")) == target.login
+                && text_of(session.get("startedAt")) == target.started_at
+                && session.get("endedAt").map(|ended| !ended.is_null()).unwrap_or(false)
+                && session.get("pointsAfter").map(Value::is_null).unwrap_or(true)
+        }) else {
+            continue;
+        };
+        let before = session.get("pointsBefore").and_then(Value::as_u64);
         // баланс не может уменьшиться — нулевой/битый ответ не записываем
-        if let Some(value) = points {
-            if before.map(|before| value < before).unwrap_or(false) {
-                continue;
-            }
-            sessions[index]["pointsAfter"] = json!(value);
-            changed = true;
-            push_log(
-                "info",
-                format!("Стрик: дозаполнил баланс {login} — {value}"),
-            );
+        if before.map(|before| value < before).unwrap_or(false) {
+            continue;
         }
+        session["pointsAfter"] = json!(value);
+        changed = true;
+        push_log(
+            "info",
+            format!("Стрик: дозаполнил баланс {} — {value}", target.login),
+        );
     }
     if !changed {
         return;
@@ -6146,7 +6202,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::write_atomic;
+    use super::{campaign_ends_at, write_atomic};
+    use serde_json::json;
 
     fn temp_dir(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("dropforge-test-{}-{}", name, std::process::id()));
@@ -6198,5 +6255,20 @@ mod tests {
     fn write_atomic_falls_back_when_target_dir_missing_reports_error() {
         let dir = temp_dir("missing").join("no-such-subdir");
         assert!(write_atomic(dir.join("x.json"), "{}").is_err());
+    }
+
+    #[test]
+    fn campaign_end_accepts_both_keys_and_offsets() {
+        let end = campaign_ends_at(&json!({ "endAt": "2026-11-27T12:00:00+03:00" })).unwrap();
+        assert_eq!(end.to_rfc3339(), "2026-11-27T09:00:00+00:00");
+        let end = campaign_ends_at(&json!({ "endsAt": "2026-11-27T09:00:00Z" })).unwrap();
+        assert_eq!(end.to_rfc3339(), "2026-11-27T09:00:00+00:00");
+    }
+
+    #[test]
+    fn campaign_end_ignores_missing_or_broken_dates() {
+        assert!(campaign_ends_at(&json!({})).is_none());
+        assert!(campaign_ends_at(&json!({ "endAt": "not-a-date" })).is_none());
+        assert!(campaign_ends_at(&json!({ "endAt": null, "endsAt": "2026-11-27T09:00:00Z" })).is_some());
     }
 }
