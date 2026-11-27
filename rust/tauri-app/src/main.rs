@@ -2838,6 +2838,29 @@ fn channel_points(token: &str, login: &str) -> Option<u64> {
         .and_then(Value::as_u64)
 }
 
+/// Баланс перед стартом важен для дельты: один таймаут GQL не должен оставлять
+/// сессию без «баллов до» и превращать нормальный просмотр в «0 баллов».
+fn channel_points_retry(token: &str, login: &str) -> Option<u64> {
+    for attempt in 0..3 {
+        if let Some(value) = channel_points(token, login) {
+            return Some(value);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300 * (attempt + 1)));
+    }
+    None
+}
+
+/// Последний известный баланс канала из streaks.json — запасной вариант, если
+/// Twitch не ответил перед стартом.
+fn streak_channel_balance(login: &str) -> Option<u64> {
+    load_streaks()
+        .get("channels")
+        .and_then(Value::as_array)
+        .and_then(|items| items.iter().find(|item| text_of(item.get("login")) == login))
+        .and_then(|item| item.get("balance"))
+        .and_then(Value::as_u64)
+}
+
 /// Как часто перепроверять, есть ли у канала баллы: неделя.
 const STREAK_POINTS_TTL: i64 = 7 * 24 * 60 * 60;
 /// sha256 persisted-запроса ChannelPointsContext (тот же, что у веб-клиента Twitch).
@@ -3014,6 +3037,10 @@ fn finish_streak_session(login: &str, points_before: Option<u64>, app: Option<ta
             }
             if let Some(value) = delta {
                 item["pointsDelta"] = json!(value);
+            }
+            if let Some(value) = points_after {
+                item["balance"] = json!(value);
+                item["balanceAt"] = json!(chrono::Utc::now().to_rfc3339());
             }
         }
     }
@@ -3370,7 +3397,10 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
         return json!({ "error": "нужен вход в Twitch" });
     }
     let user_id = text_of(auth_state().get("userId"));
-    let points_before = channel_points(&token, login);
+    let points_before = channel_points_retry(&token, login).or_else(|| streak_channel_balance(login));
+    if points_before.is_none() {
+        log_warn(format!("Стрик: не удалось получить баланс до старта {login}"));
+    }
     let generation = {
         let mut gen = STREAK_GEN.lock().unwrap();
         *gen += 1;
