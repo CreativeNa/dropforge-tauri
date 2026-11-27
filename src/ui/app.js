@@ -507,7 +507,19 @@ function liveProgress() {
   const active =
     drops.find((drop) => !drop.isClaimed && drop.progress < 1) ?? drops[drops.length - 1] ?? null;
   const next = active ? drops.find((drop) => !drop.isClaimed && drop.id !== active.id) : null;
-  const remaining = active ? Math.max(0, active.requiredMinutes - active.currentMinutes) : 0;
+  // Пока идёт фарм, минуты в progress.json обновляются раз в тик вотчера.
+  // Считаем остаток от его отметки «at» и досчитываем в реальном времени,
+  // чтобы на карточке шёл обратный отсчёт, а не стояло одно и то же число.
+  const watch = state.snapshot?.watch;
+  const farming = Boolean(state.snapshot?.status?.running);
+  const liveWatch = farming && watch && watch.dropId === active?.id && watch.at ? watch : null;
+  const watchedNow = liveWatch
+    ? Number(liveWatch.currentMinutes) + (Date.now() - Date.parse(liveWatch.at)) / 60000
+    : active?.currentMinutes ?? 0;
+  const remaining = active ? Math.max(0, active.requiredMinutes - watchedNow) : 0;
+  state.liveAnchor = active && liveWatch
+    ? { required: Number(active.requiredMinutes), base: Number(liveWatch.currentMinutes), at: Date.parse(liveWatch.at) }
+    : null;
   const percent = active ? Math.round(Math.min(1, active.progress) * 100) : 0;
   const nextChainName = (collection?.chains ?? []).find((chain) => !chain.earned)?.name ?? '';
 
@@ -535,13 +547,13 @@ function liveProgress() {
       </div>
       ${collection ? '' : `<div class="bar ${active.isClaimed ? 'ok' : ''}"><i style="width:${percent}%"></i></div>`}
       <div class="live-row">
-        <span class="live-minutes">${collection ? `цепочки ${collection.chests}/${collection.chestsTotal} · подписки ${collection.subs}/${collection.subsTotal}` : `${active.currentMinutes}/${active.requiredMinutes} мин`}</span>
+        <span class="live-minutes"${collection ? '' : ' id="live-minutes"'}>${collection ? `цепочки ${collection.chests}/${collection.chestsTotal} · подписки ${collection.subs}/${collection.subsTotal}` : `${Math.floor(watchedNow)}/${active.requiredMinutes} мин`}</span>
         ${collection ? '' : `<span class="live-percent">${percent}%</span>`}
       </div>
       <div class="live-row">
-        <span class="live-left">${collection
+        <span class="live-left" id="live-remaining">${collection
           ? (nextChainName ? `следующая цепочка: ${esc(nextChainName)}` : 'все цепочки получены')
-          : (remaining > 0 ? `ещё ~${formatMinutes(remaining)}` : 'готово к получению')}</span>
+          : (remaining > 0 ? `ещё ~${formatMinutes(Math.max(1, Math.floor(remaining)))}` : 'готово к получению')}</span>
         <span class="live-left">${campaign.endsAt ? 'до ' + formatDate(campaign.endsAt) : ''}</span>
       </div>
     </div>`
@@ -759,7 +771,6 @@ function gamesSection() {
   <div class="section-head">
     <h2 class="section-title">Игры с дропами</h2>
     <span class="section-hint" id="games-hint">${visible} ${visible === 1 ? 'игра' : 'игр'} · нажмите на карточку, чтобы увидеть награды</span>
-    <button class="btn-ghost small" style="margin-left:auto" data-action="select-farmable">Выбрать всё доступное</button>
   </div>
 
   <div class="games-grid" id="games-grid" ${visible ? '' : 'hidden'}>${cards}</div>
@@ -1836,16 +1847,6 @@ const actions = {
     await api.legacyLaunch();
   },
 
-  async 'select-farmable'() {
-    await withBusy('farm', async () => {
-      const slugs = state.snapshot.games.filter((game) => game.canEarn).map((game) => game.slug);
-      if (!slugs.length) {
-        toast('Нет игр с доступными дропами', 'error');
-        return;
-      }
-      applySnapshot(await api.selectOnly(slugs));
-    });
-  },
   async 'clear-queue'() {
     const count = state.snapshot.settings?.games?.length ?? 0;
     if (!count) return;
@@ -2380,7 +2381,25 @@ document.addEventListener('scroll', (event) => {
 
 /* -------------------------------------------------------------------- boot */
 
+function tickLiveCard() {
+  const anchor = state.liveAnchor;
+  if (!anchor) return;
+  const minutes = document.getElementById('live-minutes');
+  const left = document.getElementById('live-remaining');
+  if (!minutes && !left) return;
+  const watched = anchor.base + (Date.now() - anchor.at) / 60000;
+  if (minutes) minutes.textContent = `${Math.floor(watched)}/${anchor.required} мин`;
+  if (left) {
+    const remaining = anchor.required - watched;
+    left.textContent =
+      remaining > 0 ? `ещё ~${formatMinutes(Math.max(1, Math.floor(remaining)))}` : 'готово к получению';
+  }
+}
+
 async function boot() {
+  // Раз в секунду подтягиваем время на карточке «Сейчас в фарме».
+  setInterval(tickLiveCard, 1000);
+
   const params = new URLSearchParams(location.search);
 
   if (api?.version) {

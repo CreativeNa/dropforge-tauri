@@ -35,7 +35,6 @@
     skip: () => call('farm_skip'),
     toggleGame: (slug) => call('games_toggle', { slug }),
     togglePin: (slug) => call('games_pin', { slug }),
-    selectOnly: (slugs) => call('games_select_only', { slugs }),
     claimAll: () => call('drops_claim_all'),
     saveSettings: (patch) => call('settings_save', { patch }),
     streakSave: (patch) => call('streak_settings_save', { patch }),
