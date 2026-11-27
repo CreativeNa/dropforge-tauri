@@ -26,7 +26,7 @@ fn emit(value: &Value) {
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(20)))
-        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) DropForge/1.1")
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36")
         .build()
         .new_agent()
 }
@@ -74,9 +74,15 @@ fn playback_token(agent: &ureq::Agent, login: &str, auth: &str) -> Result<(Strin
     Ok((value.to_string(), signature.to_string()))
 }
 
-fn stream_id(agent: &ureq::Agent, login: &str, token: &str) -> Option<String> {
+struct StreamMeta {
+    broadcast_id: String,
+    game_id: String,
+    game_name: String,
+}
+
+fn stream_meta(agent: &ureq::Agent, login: &str, token: &str) -> Option<StreamMeta> {
     let body = json!({
-        "query": "query($login:String!){ user(login:$login){ stream { id } } }",
+        "query": "query($login:String!){ user(login:$login){ stream { id game { id name } } } }",
         "variables": { "login": login }
     });
     let mut request = agent
@@ -92,16 +98,28 @@ fn stream_id(agent: &ureq::Agent, login: &str, token: &str) -> Option<String> {
         .body_mut()
         .read_json()
         .ok()?;
-    response
-        .get("data")
-        .and_then(|data| data.get("user"))
-        .and_then(|user| user.get("stream"))
-        .and_then(|stream| stream.get("id"))
-        .map(|value| match value {
-            Value::String(text) => text.clone(),
-            other => other.to_string(),
-        })
-        .filter(|value| !value.is_empty() && value != "null")
+    let stream = response
+        .get("data")?
+        .get("user")?
+        .get("stream")?;
+    let broadcast_id = stream.get("id").map(text_value).unwrap_or_default();
+    if broadcast_id.is_empty() || broadcast_id == "null" {
+        return None;
+    }
+    let game = stream.get("game");
+    Some(StreamMeta {
+        broadcast_id,
+        game_id: game.and_then(|game| game.get("id")).map(text_value).unwrap_or_default(),
+        game_name: game.and_then(|game| game.get("name")).map(text_value).unwrap_or_default(),
+    })
+}
+
+fn text_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
 }
 
 fn http_lines(text: &str) -> Vec<String> {
@@ -162,6 +180,7 @@ fn watch_tick(
 
     let master = agent
         .get(&url)
+        .header("Connection", "close")
         .call()
         .map_err(|error| format!("master: {error}"))?
         .body_mut()
@@ -175,6 +194,7 @@ fn watch_tick(
 
     let chunklist = agent
         .get(variant_url)
+        .header("Connection", "close")
         .call()
         .map_err(|error| format!("variant: {error}"))?
         .body_mut()
@@ -184,22 +204,36 @@ fn watch_tick(
     let chunks: Vec<String> = http_lines(&chunklist).into_iter().take(40).collect();
     let mut ok = 0usize;
     for chunk in &chunks {
-        match agent.head(chunk).call() {
+        match agent
+            .head(chunk)
+            .header("Referer", &format!("https://www.twitch.tv/{login}"))
+            .header("Origin", "https://www.twitch.tv")
+            .call()
+        {
             Ok(response) if response.status().as_u16() < 400 => ok += 1,
             _ => {}
         }
     }
 
-    let broadcast_id = stream_id(agent, login, token).unwrap_or_default();
+    let Some(meta) = stream_meta(agent, login, token) else {
+        return Err("нет данных текущего эфира".into());
+    };
     let payload = json!([{
         "event": "minute-watched",
         "properties": {
             "channel_id": channel_id,
-            "broadcast_id": broadcast_id,
+            "broadcast_id": meta.broadcast_id,
             "player": "site",
             "channel": login,
-            "client_time": chrono::Utc::now().to_rfc3339(),
+            "client_time": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "game": meta.game_name,
+            "game_id": meta.game_id,
+            "hidden": false,
+            "is_live": true,
             "live": true,
+            "logged_in": true,
+            "minutes_logged": 1,
+            "muted": false,
             "user_id": user_id
         }
     }]);

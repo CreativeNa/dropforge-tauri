@@ -3393,7 +3393,7 @@ fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &s
             "--channel-id", channel_id,
             "--user", &user_id,
             "--minutes", &watch_minutes.to_string(),
-            "--interval", "30",
+            "--interval", "20",
             "--points-only",
             "--stdin-token",
             "--exit-on-stdin-close",
