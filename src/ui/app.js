@@ -85,6 +85,7 @@ const state = {
   streakChannel: null,
   streakClosing: false,
   streakPoints: null,
+  streakPointsTried: null,
   query: '',
   page: 0,
   sheetGame: null,
@@ -1220,10 +1221,10 @@ function streakPop() {
       <div class="streak-pop-name">${esc(channel.login)}</div>
       ${live ? '<div class="streak-pop-status"><span class="streak-dot"></span>В эфире</div>' : ''}
     </header>
-    ${live ? `<div class="streak-pop-balance">
+    <div class="streak-pop-balance">
       <b>${balance === null ? '…' : balance.toLocaleString('ru-RU')}</b>
       <span>баллов</span>
-    </div>` : ''}
+    </div>
     <div class="streak-pop-list">
       ${rows || '<div class="streak-pop-empty">Просмотров этого канала ещё не было. Запусти просмотр — здесь появятся время и прирост баллов.</div>'}
     </div>
@@ -1302,8 +1303,11 @@ function syncStreakPoints() {
   if (!state.streakChannel || state.streakClosing) return;
   const login = state.streakChannel;
   if (!streakChannelLive(login)) {
+    // у офлайна баланс не меняется: спрашиваем один раз на открытое окно
     stopStreakPointsTimer();
-    state.streakPoints = null;
+    if (!(state.streakPoints && state.streakPoints.login === login) && state.streakPointsTried !== login) {
+      loadStreakPoints(login);
+    }
     return;
   }
   if (streakPointsTimer) return;
@@ -1319,10 +1323,7 @@ function syncStreakPoints() {
 
 async function loadStreakPoints(login) {
   if (typeof api?.streakPoints !== 'function') return;
-  if (!streakChannelLive(login)) {
-    stopStreakPointsTimer();
-    return;
-  }
+  state.streakPointsTried = login;
   try {
     const result = await api.streakPoints(login);
     if (!result || result.error) return;
@@ -1345,6 +1346,7 @@ function closeStreakPop() {
     state.streakChannel = null;
     state.streakClosing = false;
     state.streakPoints = null;
+    state.streakPointsTried = null;
     render();
   }, 140);
 }
@@ -1355,6 +1357,7 @@ function openStreakPop(login) {
   state.streakChannel = login;
   state.streakClosing = false;
   state.streakPoints = null;
+  state.streakPointsTried = null;
   render();
 }
 
