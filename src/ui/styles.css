@@ -88,7 +88,7 @@ button {
 
 .app {
   display: grid;
-  grid-template-columns: 268px minmax(0, 1fr);
+  grid-template-columns: 284px minmax(0, 1fr);
   height: 100vh;
 }
 
@@ -418,6 +418,30 @@ button {
 .icon-btn svg {
   width: 15px;
   height: 15px;
+}
+
+/* шестерёнка и выход в подвале сайдбара — на 20% крупнее */
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+
+.account-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+}
+
+.account-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.account-btn.active {
+  color: var(--accent);
+  background: var(--panel-2);
 }
 
 /* ------------------------------------------------------------------- main */

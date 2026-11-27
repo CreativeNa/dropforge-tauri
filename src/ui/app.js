@@ -580,9 +580,6 @@ function sidebar() {
       <button class="nav-item ${state.view === 'streaks' ? 'active' : ''}" data-action="nav" data-view="streaks">
         ${ICONS.flame} Стрики
       </button>
-      <button class="nav-item ${state.view === 'settings' ? 'active' : ''}" data-action="nav" data-view="settings">
-        ${ICONS.gear} Настройки
-      </button>
     </nav>
 
     ${liveProgress()}
@@ -603,7 +600,10 @@ function sidebar() {
       <div class="account-meta">
         <div class="account-name">${esc(auth?.user?.login ?? 'не подключён')}</div>
       </div>
-      <button class="icon-btn" title="Выйти" data-action="logout">${ICONS.logout}</button>
+      <div class="account-actions">
+        <button class="icon-btn account-btn${state.view === 'settings' ? ' active' : ''}" title="Настройки" aria-label="Настройки" data-action="nav" data-view="settings">${ICONS.gear}</button>
+        <button class="icon-btn account-btn" title="Выйти" aria-label="Выйти" data-action="logout">${ICONS.logout}</button>
+      </div>
     </div>
   </aside>`;
 }
