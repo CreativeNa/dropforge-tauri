@@ -497,11 +497,14 @@ button {
   color: var(--muted);
 }
 
+/* Правый отступ меньше на ширину полосы прокрутки (10px): scrollbar-gutter
+   резервирует её внутри .content, а у .topbar гуттера нет. Иначе правый край
+   карточек уезжает влево от кнопки «Обновить» на эти 10px. */
 .content {
   flex: 1;
   overflow-y: auto;
   scrollbar-gutter: stable;
-  padding: 20px 26px 40px;
+  padding: 20px 16px 40px 26px;
   min-height: 0;
 }
 
