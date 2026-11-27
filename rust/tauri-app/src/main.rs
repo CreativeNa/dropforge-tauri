@@ -3048,6 +3048,75 @@ fn close_open_sessions(login: Option<&str>, points_after: Option<u64>) {
     }
 }
 
+/// Дозаполняет `pointsAfter` у сессий, закрытых не по-человечески: при запуске
+/// после обновления, падения или зависания. Сначала берём баланс из следующей
+/// сессии того же канала (он и есть «сколько стало»), а для последней сессии
+/// спрашиваем Twitch один раз. Так в истории вместо прочерка появляется прирост.
+fn backfill_session_points(app: Option<tauri::AppHandle>) {
+    let Some(token) = load_token() else { return };
+    let mut data = load_streaks();
+    let mut sessions = data
+        .get("sessions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    if sessions.is_empty() {
+        return;
+    }
+    let mut changed = false;
+    let mut fetched = 0usize;
+    for index in 0..sessions.len() {
+        let ended = sessions[index]
+            .get("endedAt")
+            .map(|value| !value.is_null())
+            .unwrap_or(false);
+        let missing = sessions[index]
+            .get("pointsAfter")
+            .map(Value::is_null)
+            .unwrap_or(true);
+        if !ended || !missing {
+            continue;
+        }
+        let login = text_of(sessions[index].get("login"));
+        if login.is_empty() {
+            continue;
+        }
+        let before = sessions[index].get("pointsBefore").and_then(Value::as_u64);
+        let next = sessions[index + 1..]
+            .iter()
+            .find(|session| text_of(session.get("login")) == login)
+            .and_then(|session| session.get("pointsBefore").and_then(Value::as_u64));
+        let points = match next {
+            Some(value) => Some(value),
+            None if fetched < 5 => {
+                fetched += 1;
+                channel_points(&token, &login)
+            }
+            None => None,
+        };
+        // баланс не может уменьшиться — нулевой/битый ответ не записываем
+        if let Some(value) = points {
+            if before.map(|before| value < before).unwrap_or(false) {
+                continue;
+            }
+            sessions[index]["pointsAfter"] = json!(value);
+            changed = true;
+            push_log(
+                "info",
+                format!("Стрик: дозаполнил баланс {login} — {value}"),
+            );
+        }
+    }
+    if !changed {
+        return;
+    }
+    data["sessions"] = json!(sessions);
+    save_streaks(&data);
+    if let Some(handle) = app {
+        let _ = handle.emit("state", snapshot_from_profile());
+    }
+}
+
 fn record_session_start(login: &str, started_at: &str, points_before: Option<u64>, seconds: u64, unlimited: bool) {
     let _guard = STREAK_DATA.lock().unwrap();
     close_open_sessions(Some(login), points_before);
@@ -5960,6 +6029,13 @@ fn main() {
                     let _guard = STREAK_DATA.lock().unwrap();
                     close_open_sessions(None, None);
                 }
+                // Сессии, оборванные обновлением/падением, остаются без баланса
+                // на финише — дозаполняем их в фоне, чтобы не тормозить старт.
+                let backfill_handle = app.handle().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    backfill_session_points(Some(backfill_handle));
+                });
             }
             // Иконка в трее: свернуть в трей и выйти
             let show = MenuItem::with_id(app, "show", "Открыть DropForge", true, None::<&str>)?;
