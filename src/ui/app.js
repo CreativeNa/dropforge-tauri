@@ -1290,7 +1290,7 @@ function streaksView() {
           ${channel.avatar ? `<img src="${esc(channel.avatar)}" alt="" loading="lazy" onerror="this.remove()" />` : esc((channel.login ?? '?').slice(0, 1).toUpperCase())}
         </div>
         <div class="streak-nopoints-name">${esc(channel.login)}</div>
-        <div class="streak-nopoints-note">канал не имеет баллов канала<br />фарм недоступен</div>
+        <div class="streak-nopoints-note">канал не имеет баллов канала</div>
       </div>`;
     }
     const streakValue = Number(channel.streak) > 0 ? channel.streak : null;
