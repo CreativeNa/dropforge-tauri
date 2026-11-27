@@ -3517,6 +3517,23 @@ fn streak_snapshot() -> Value {
     streak_view()
 }
 
+/// Баланс баллов канала «на текущую минуту» для мини-окна статистики.
+#[tauri::command]
+async fn streak_points(login: String) -> Value {
+    let login_for_points = login.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        let token = load_token().ok_or_else(|| "нет входа в Twitch".to_string())?;
+        channel_points(&token, &login_for_points)
+            .ok_or_else(|| "не удалось получить баллы канала".to_string())
+    })
+    .await
+    .unwrap_or_else(|_| Err("не удалось получить баллы канала".to_string()));
+    match outcome {
+        Ok(balance) => json!({ "ok": true, "login": login, "balance": balance, "at": chrono::Utc::now().to_rfc3339() }),
+        Err(error) => json!({ "login": login, "error": error }),
+    }
+}
+
 #[tauri::command]
 fn streak_settings_save(app: tauri::AppHandle, patch: Value) -> Value {
     log_info(format!("Стрик: настройки {}", patch.to_string()));
@@ -6019,6 +6036,7 @@ fn main() {
             streak_refresh,
             streak_watch,
             streak_stop,
+            streak_points,
             not_wired
         ])
         .build(tauri::generate_context!())

@@ -84,7 +84,7 @@ const state = {
   streakMenu: false,
   streakChannel: null,
   streakClosing: false,
-  streakAnimating: false,
+  streakPoints: null,
   query: '',
   page: 0,
   sheetGame: null,
@@ -1153,13 +1153,13 @@ function shortMinutes(value) {
   return number.toFixed(1);
 }
 
-function streakSheet() {
+function streakPop() {
   const streak = state.snapshot.streak ?? {};
   const channels = streak.channels ?? [];
   const channel = channels.find((item) => item.login === state.streakChannel);
   if (!channel) return '';
   const allSessions = (streak.sessions ?? []).filter((session) => session.login === channel.login);
-  const MAX_ROWS = 10;
+  const MAX_ROWS = 15;
   const sessions = allSessions.slice(0, MAX_ROWS);
   const fmtTime = (value) => {
     if (!value) return '';
@@ -1169,13 +1169,6 @@ function streakSheet() {
     const time = date.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
     return sameDay ? time : date.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) + ' ' + time;
   };
-  const deltas = allSessions
-    .map((session) => {
-      const before = Number(session.pointsBefore);
-      const after = Number(session.pointsAfter);
-      return before > 0 && after > 0 ? after - before : null;
-    })
-    .filter((value) => value !== null && Number.isFinite(value));
   const sessionMinutes = (session) => {
     const startedAt = new Date(session.startedAt).getTime();
     const endedAt = session.endedAt ? new Date(session.endedAt).getTime() : Date.now();
@@ -1184,85 +1177,126 @@ function streakSheet() {
     }
     return Number(session.minutes) || 0;
   };
-  const totalMinutes = allSessions.reduce((sum, session) => sum + sessionMinutes(session), 0);
-  const totalPoints = deltas.reduce((sum, value) => sum + value, 0);
-  const best = deltas.length ? Math.max(...deltas) : null;
-  const gainedCount = allSessions.filter((session) => session.gained).length;
-  const chestsCount = allSessions.reduce((sum, session) => sum + (Number(session.chestsClaimed) || 0), 0);
-  const bonusPoints = allSessions.reduce((sum, session) => sum + (Number(session.bonusPoints) || 0), 0);
-  const streakValue = Number(channel.streak) > 0 ? channel.streak : null;
   const status = channel.live ? 'В эфире' : channel.watchedToday ? 'Смотрел сегодня' : 'Офлайн';
+  const points = state.streakPoints && state.streakPoints.login === channel.login ? state.streakPoints : null;
+  const balance = points ? Number(points.balance) : null;
+  const balanceAt = points ? fmtTime(points.at) : '';
 
-  const rows = sessions.map((session, index) => {
+  const rows = sessions.map((session) => {
     const before = Number(session.pointsBefore);
     const after = Number(session.pointsAfter);
     const hasBefore = Number.isFinite(before) && before > 0;
     const hasAfter = Number.isFinite(after) && after > 0;
     const delta = hasBefore && hasAfter ? after - before : null;
-    const started = fmtTime(session.startedAt);
+    const started = fmtTime(session.startedAt) || '—';
     const ended = session.endedAt ? fmtTime(session.endedAt) : 'сейчас';
-    const minutes = Number(session.minutes) || 0;
+    // «25.11 16:42 → 17:02»: дату пишем один раз, если она общая
+    const sameDayLabel = started.length > 5 && ended.length > 5 && started.slice(0, 5) === ended.slice(0, 5);
+    const endedLabel = sameDayLabel ? ended.slice(6) : ended;
+    const deltaClass = delta === null ? '' : delta > 449 ? ' gain' : delta > 0 ? ' plus' : '';
     return `
-      <div class="streak-sheet-row" style="${state.streakAnimating ? `animation-delay:${index * 26}ms` : 'animation:none'}">
-        <div class="streak-sheet-time">${started} → ${ended}</div>
-        <div class="streak-sheet-points">
-          <span>${hasBefore ? before.toLocaleString('ru-RU') : '—'}</span>
-          <span class="arrow">→</span>
-          <span>${hasAfter ? after.toLocaleString('ru-RU') : 'нет данных'}</span>
-          ${delta !== null ? `<b class="${delta > 449 ? 'gain' : delta > 0 ? 'plus' : ''}">${delta > 0 ? '+' : ''}${delta}</b>` : ''}
+      <div class="streak-pop-row">
+        <div class="streak-pop-when">
+          <span>${started} → ${endedLabel}</span>
+          <em>${session.unlimited ? '∞' : shortMinutes(sessionMinutes(session)) + ' мин'}</em>
         </div>
-        <div class="streak-sheet-dur">${session.unlimited ? '∞' : shortMinutes(minutes) + ' мин'}${Number(session.chestsClaimed) > 0 ? ' · +' + session.chestsClaimed : ''}</div>
-        ${session.gained ? '<span class="streak-sheet-gain">серия</span>' : ''}
+        <div class="streak-pop-delta${deltaClass}">${delta === null ? '—' : `${delta > 0 ? '+' : ''}${delta}`}</div>
       </div>`;
   }).join('');
 
   return `
-  <div class="streak-sheet-backdrop${state.streakClosing ? '' : ' open'}" data-action="streak-sheet-close"></div>
-  <aside class="streak-sheet${state.streakClosing ? ' closing' : state.streakAnimating ? ' opening' : ' open'}" role="dialog" aria-label="Статистика ${esc(channel.login)}">
-    <div class="streak-sheet-grab"></div>
-    <header class="streak-sheet-head">
-      <div class="streak-sheet-avatar">
-        ${channel.avatar ? `<img src="${esc(channel.avatar)}" alt="" onerror="this.remove()" />` : esc((channel.login ?? '?').slice(0, 1).toUpperCase())}
-      </div>
-      <div class="streak-sheet-title">
-        <div class="streak-sheet-name">${esc(channel.login)}</div>
-        <div class="streak-sheet-status"><span class="streak-dot${channel.live ? '' : ' offline'}"></span>${status}</div>
-      </div>
-      <div class="streak-sheet-series">
-        <b>${streakValue ?? '—'}</b>
-        <span>серия</span>
-      </div>
-      <button class="streak-sheet-close" data-action="streak-sheet-close" title="Закрыть">×</button>
+  <aside class="streak-pop${state.streakClosing ? ' closing' : ' open'}" role="dialog" aria-label="Статистика ${esc(channel.login)}">
+    <header class="streak-pop-head">
+      <div class="streak-pop-name">${esc(channel.login)}</div>
+      <div class="streak-pop-status"><span class="streak-dot${channel.live ? '' : ' offline'}"></span>${status}</div>
     </header>
-    <div class="streak-sheet-metrics">
-      <div><b>${allSessions.length}</b><span>просмотров</span></div>
-      <div><b>${totalMinutes}</b><span>минут</span></div>
-      <div><b>${deltas.length ? (totalPoints > 0 ? '+' : '') + totalPoints : '—'}</b><span>баллов</span></div>
-      <div><b>${best !== null ? (best > 0 ? '+' : '') + best : '—'}</b><span>лучший прирост</span></div>
-      <div><b>${gainedCount}</b><span>продлений</span></div>
-      <div><b>${chestsCount}</b><span>сундуков</span></div>
-      <div><b>${bonusPoints > 0 ? '+' + bonusPoints : '—'}</b><span>бонус</span></div>
+    <div class="streak-pop-balance">
+      <b>${balance === null ? '…' : balance.toLocaleString('ru-RU')}</b>
+      <span>${balance === null ? 'получаю баллы…' : `баллов на ${balanceAt}`}</span>
     </div>
-    <div class="streak-sheet-list">
-      ${rows || '<div class="streak-sheet-empty">Просмотров этого канала ещё не было. Запусти просмотр — здесь появятся время, баллы и результат.</div>'}
+    <div class="streak-pop-list">
+      ${rows || '<div class="streak-pop-empty">Просмотров этого канала ещё не было. Запусти просмотр — здесь появятся время и прирост баллов.</div>'}
     </div>
-    ${allSessions.length > MAX_ROWS ? `<div class="streak-sheet-more">Показаны последние ${MAX_ROWS} из ${allSessions.length}</div>` : ''}
+    <footer class="streak-pop-foot">${allSessions.length > sessions.length ? `Последние ${sessions.length} из ${allSessions.length} · прокрутка внутри окна` : `Записей: ${allSessions.length}`}</footer>
   </aside>`;
 }
 
+function positionStreakPop() {
+  const pop = document.querySelector('.streak-pop');
+  if (!pop) return;
+  const login = state.streakChannel;
+  const card = login
+    ? Array.from(document.querySelectorAll('.streak-card')).find((item) => item.dataset.login === login)
+    : null;
+  const rect = pop.getBoundingClientRect();
+  const width = rect.width || 356;
+  const height = rect.height || 320;
+  if (card) {
+    const box = card.getBoundingClientRect();
+    const gap = 16;
+    let left = box.right + gap;
+    let top = box.top + box.height / 2 - Math.min(height * 0.45, 150);
+    if (left + width > window.innerWidth - 16) left = box.left - width - gap;
+    if (left < 16) left = 16;
+    if (top + height > window.innerHeight - 16) top = window.innerHeight - height - 16;
+    if (top < 16) top = 16;
+    const flipped = left < box.left;
+    pop.classList.toggle('left', flipped);
+    pop.style.transformOrigin = flipped ? 'right center' : 'left center';
+    const tail = box.top + box.height / 2 - top;
+    pop.style.setProperty('--tail-y', `${Math.round(Math.max(20, Math.min(height - 20, tail)))}px`);
+    pop.style.left = `${Math.round(left)}px`;
+    pop.style.top = `${Math.round(top)}px`;
+  } else {
+    pop.style.left = `${Math.round(window.innerWidth - width - 24)}px`;
+    pop.style.top = '110px';
+  }
+}
 
-function closeStreakSheet() {
+let streakPointsTimer = null;
+
+function stopStreakPointsTimer() {
+  if (streakPointsTimer) clearInterval(streakPointsTimer);
+  streakPointsTimer = null;
+}
+
+async function loadStreakPoints(login) {
+  if (typeof api?.streakPoints !== 'function') return;
+  try {
+    const result = await api.streakPoints(login);
+    if (!result || result.error) return;
+    if (state.streakChannel !== login || state.streakClosing) return;
+    state.streakPoints = { login, balance: Number(result.balance) || 0, at: result.at ?? null };
+    render();
+  } catch {
+    /* баллы не критичны: остаётся плейсхолдер */
+  }
+}
+
+function closeStreakPop() {
+  if (!state.streakChannel || state.streakClosing) return;
+  const login = state.streakChannel;
   state.streakClosing = true;
-  state.streakAnimating = false;
-  const backdrop = document.querySelector('.streak-sheet-backdrop');
-  if (backdrop) backdrop.classList.remove('open');
+  stopStreakPointsTimer();
   render();
   setTimeout(() => {
+    if (state.streakChannel !== login) return;
     state.streakChannel = null;
     state.streakClosing = false;
-    document.body.classList.remove('sheet-open');
+    state.streakPoints = null;
     render();
-  }, 260);
+  }, 140);
+}
+
+function openStreakPop(login) {
+  if (!login) return;
+  stopStreakPointsTimer();
+  state.streakChannel = login;
+  state.streakClosing = false;
+  state.streakPoints = null;
+  render();
+  loadStreakPoints(login);
+  streakPointsTimer = setInterval(() => loadStreakPoints(login), 30000);
 }
 
 function streaksView() {
@@ -1309,7 +1343,7 @@ function streaksView() {
             ? 'Смотрел сегодня'
             : 'Офлайн';
     return `
-      <div class="streak-card${channel.live ? ' live' : ''}${channel.watchedToday ? ' done' : ''}${compact ? ' compact' : ''}" data-action="streak-card" data-login="${esc(channel.login)}">
+      <div class="streak-card${channel.live ? ' live' : ''}${channel.watchedToday ? ' done' : ''}${compact ? ' compact' : ''}${state.streakChannel === channel.login && !state.streakClosing ? ' active' : ''}" data-action="streak-card" data-login="${esc(channel.login)}">
         <div class="streak-avatar">
           ${channel.avatar ? `<img src="${esc(channel.avatar)}" alt="" loading="lazy" onerror="this.remove()" />` : esc((channel.login ?? '?').slice(0, 1).toUpperCase())}
         </div>
@@ -1615,7 +1649,7 @@ function render() {
           ? streaksView()
           : settingsView();
 
-  const streakListScroll = document.querySelector('.streak-sheet-list')?.scrollTop ?? 0;
+  const streakListScroll = document.querySelector('.streak-pop-list')?.scrollTop ?? 0;
   const html = `
     <div class="app">
       ${sidebar()}
@@ -1627,7 +1661,7 @@ function render() {
       </main>
     </div>
     ${state.sheetGame ? sheet() : ''}
-    ${state.streakChannel ? streakSheet() : ''}
+    ${state.streakChannel ? streakPop() : ''}
     ${state.device && state.snapshot.auth?.loggedIn ? deviceOverlay() : ''}`;
   const template = document.createElement('template');
   template.innerHTML = html;
@@ -1636,8 +1670,9 @@ function render() {
   const contentEl = document.getElementById('content');
   if (contentEl) contentEl.scrollTop = state.scrollTop;
 
-  const streakListEl = document.querySelector('.streak-sheet-list');
+  const streakListEl = document.querySelector('.streak-pop-list');
   if (streakListEl && streakListScroll) streakListEl.scrollTop = streakListScroll;
+  if (state.streakChannel) positionStreakPop();
 
   for (const img of document.querySelectorAll('img[data-fallback]')) {
     img.addEventListener('error', () => img.remove(), { once: true });
@@ -1700,6 +1735,13 @@ const actions = {
   nav(target) {
     state.view = target.dataset.view;
     state.scrollTop = 0;
+    if (state.streakChannel) {
+      // мини-окно статистики живёт только на экране стриков
+      state.streakChannel = null;
+      state.streakClosing = false;
+      state.streakPoints = null;
+      stopStreakPointsTimer();
+    }
     render();
   },
   async refresh() {
@@ -1889,18 +1931,14 @@ const actions = {
   },
 
   'streak-card'(target) {
-    state.streakChannel = target.dataset.login;
-    state.streakClosing = false;
-    state.streakAnimating = true;
-    document.body.classList.add('sheet-open');
-    render();
-    setTimeout(() => {
-      state.streakAnimating = false;
-    }, 340);
-  },
-
-  'streak-sheet-close'() {
-    closeStreakSheet();
+    const login = target.dataset.login;
+    if (!login) return;
+    // повторный клик по той же карточке закрывает окно
+    if (state.streakChannel === login && !state.streakClosing) {
+      closeStreakPop();
+      return;
+    }
+    openStreakPop(login);
   },
 
   async 'streak-menu'() {
@@ -2252,13 +2290,44 @@ document.addEventListener(
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && state.streakChannel) {
-    closeStreakSheet();
+    closeStreakPop();
     return;
   }
   if (event.key === 'Escape' && state.sheetGame) {
     state.sheetGame = null;
     render();
   }
+});
+
+/**
+ * Мини-окно статистики закрывается кликом в любом месте приложения, кроме
+ * самого окна и карточки этого канала (клик по карточке обрабатывается отдельно:
+ * он же переключает окно на другой канал).
+ */
+document.addEventListener(
+  'pointerdown',
+  (event) => {
+    if (!state.streakChannel) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    if (target.closest('.streak-pop')) return;
+    if (target.closest('[data-action="streak-card"]')) return;
+    closeStreakPop();
+  },
+  true,
+);
+
+// окно привязано к карточке: при прокрутке и изменении размера окна оно едет следом
+document.addEventListener(
+  'scroll',
+  () => {
+    if (state.streakChannel && !state.streakClosing) positionStreakPop();
+  },
+  { capture: true, passive: true },
+);
+
+window.addEventListener('resize', () => {
+  if (state.streakChannel && !state.streakClosing) positionStreakPop();
 });
 
 document.addEventListener('scroll', (event) => {
