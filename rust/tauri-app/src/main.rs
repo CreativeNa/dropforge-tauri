@@ -4721,7 +4721,10 @@ fn settings_path() -> PathBuf {
 fn load_settings() -> Value {
     let path = settings_path();
     if let Ok(text) = std::fs::read_to_string(&path) {
-        match serde_json::from_str::<Value>(&text) {
+        // BOM появляется, если файл правили в Блокноте: без него JSON не разбирается
+        // и живая конфигурация считалась бы повреждённой и затиралась дефолтами
+        let text = text.trim_start_matches('\u{feff}');
+        match serde_json::from_str::<Value>(text) {
             Ok(value) if value.is_object() => return value,
             Ok(_) => {}
             Err(error) => {

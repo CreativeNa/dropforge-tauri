@@ -86,7 +86,6 @@ const state = {
   streakClosing: false,
   streakAnimating: false,
   query: '',
-  dropsTab: 'global',
   page: 0,
   sheetGame: null,
   busy: new Set(),
@@ -662,16 +661,10 @@ function topbar() {
 
 /* -------------------------------------------------------------- drops view */
 
-/** Кампании активной вкладки: глобальные или локальные (привязанные к каналу). */
+/** Кампании глобальных дропсов: локальные кампании каналов в списке не показываем. */
 function tabCampaigns() {
   const campaigns = state.snapshot.campaigns ?? [];
-  const local = state.dropsTab === 'local';
-  if (local) {
-    const checked = state.snapshot.settings?.localCheck;
-    if (!checked?.login) return [];
-    return campaigns.filter((campaign) => campaign.local && campaign.channel?.login === checked.login);
-  }
-  return campaigns.filter((campaign) => Boolean(campaign.local) === local);
+  return campaigns.filter((campaign) => !campaign.local);
 }
 
 /** Группирует кампании вкладки по игре — карточки строятся из них. */
@@ -726,48 +719,12 @@ function matchesQuery(game, query) {
   return !query || game.name.toLowerCase().includes(query);
 }
 
-/** Один канал: проверка существования и локальных дропсов. */
-function localChannelsBlock() {
-  const settings = state.snapshot.settings ?? {};
-  const current = settings.localChannel ?? '';
-  const checked = settings.localCheck;
-  const foundNow = (state.snapshot.campaigns ?? []).filter((campaign) => campaign.local && campaign.channel?.login === current).length;
-  const chip = current
-    ? `<span class="channel-chip">${esc(current)}<button class="channel-remove" data-action="local-clear" title="Сбросить канал">${ICONS.close}</button></span>`
-    : '';
-  let notice = '';
-  if (checked && foundNow > 0) {
-    notice = `<div class="local-note ok">Канал <b>${esc(checked.login)}</b>: найдено кампаний — ${foundNow}.</div>`;
-  } else if (checked) {
-    const at = checked.at ? new Date(checked.at).toLocaleTimeString('ru-RU') : '';
-    notice = `<div class="local-note warn">У канала <b>${esc(checked.login)}</b> сейчас нет локальных дропсов.${at ? ` Проверено в ${at}.` : ''}</div>`;
-  }
-  return `
-  <div class="channels-row">
-    ${chip || '<span class="channels-empty">Проверьте канал — покажем его локальные дропсы</span>'}
-    <form class="channel-form" data-action="local-check">
-      <input name="login" placeholder="логин канала, например streamdatabase" autocomplete="off" spellcheck="false" value="${esc(current)}" />
-      <button class="btn-ghost small" type="submit">Проверить</button>
-    </form>
-  </div>
-  ${notice}`;
-}
-
 /**
  * Сетка игр. Карточки создаются один раз; при поиске мы только прячем
  * лишние — иначе на каждую букву пересоздавались бы элементы и картинки,
  * из-за чего сетка дёргалась.
  */
-function localSection() {
-  return `
-    <div class="empty" style="min-height:420px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center">
-      <h3 style="font-size:18px">В разработке</h3>
-      <p>Локальные дропсы пока недоступны — раздел в разработке.</p>
-    </div>`;
-}
-
 function gamesSection() {
-  const local = state.dropsTab === 'local';
   const games = sortedGames();
   const query = state.query.trim().toLowerCase();
   const filtered = games.filter((game) => matchesQuery(game, query));
@@ -787,6 +744,9 @@ function gamesSection() {
   const start = page * perPage;
   const slice = filtered.slice(start, start + perPage);
   const visible = total;
+  // каталог ещё грузится: не показываем «ничего не найдено» вместо прогресса
+  const loadingGames =
+    total === 0 && !query && (isBusy('refresh') || (state.snapshot.stats?.campaigns ?? 0) === 0);
   const cards = slice.map((game) => gameCard(game)).join('');
   const pager = total > 0
     ? '<div class="pager">' + Array.from({ length: pageCount }, (_, index) =>
@@ -796,18 +756,17 @@ function gamesSection() {
 
 
   return `
-  ${local ? localChannelsBlock() : ''}
   <div class="section-head">
-    <h2 class="section-title">${local ? 'Локальные дропсы каналов' : 'Игры с дропами'}</h2>
+    <h2 class="section-title">Игры с дропами</h2>
     <span class="section-hint" id="games-hint">${visible} ${visible === 1 ? 'игра' : 'игр'} · нажмите на карточку, чтобы увидеть награды</span>
-    ${local ? '' : '<button class="btn-ghost small" style="margin-left:auto" data-action="select-farmable">Выбрать всё доступное</button>'}
+    <button class="btn-ghost small" style="margin-left:auto" data-action="select-farmable">Выбрать всё доступное</button>
   </div>
 
   <div class="games-grid" id="games-grid" ${visible ? '' : 'hidden'}>${cards}</div>
   ${pager}
   <div class="empty" id="games-empty" ${visible ? 'hidden' : ''}>
-    ${local
-      ? '<h3>Локальных дропсов нет</h3><p>Проверьте канал выше — приложение покажет кампании, которые Twitch выдаёт только на нём.</p>'
+    ${loadingGames
+      ? '<h3>Загружаю каталог…</h3><p>При первом запуске это занимает несколько секунд.</p>'
       : '<h3>Ничего не найдено</h3><p>Измените запрос или обновите список — возможно, кампании ещё не начались.</p>' + (query ? '<button class="btn-ghost" data-action="clear-search">Сбросить фильтр</button>' : '')}
   </div>`;
 }
@@ -827,18 +786,11 @@ function catalogNotice(snapshot) {
 
 function dropsView() {
   const snapshot = state.snapshot;
-  const local = state.dropsTab === 'local';
-  const campaigns = snapshot.campaigns ?? [];
-  const globalCount = campaigns.filter((campaign) => !campaign.local).length;
-  const checkedLogin = snapshot.settings?.localCheck?.login;
-  const localCount = checkedLogin
-    ? campaigns.filter((campaign) => campaign.local && campaign.channel?.login === checkedLogin).length
-    : 0;
 
   return `
   ${catalogNotice(snapshot)}
 
-  ${local ? localSection() : `<div id="games-section">${gamesSection()}</div>`}`;
+  <div id="games-section">${gamesSection()}</div>`;
 }
 
 const CARD_CACHE = new Map();
@@ -1710,7 +1662,6 @@ async function withBusy(key, fn) {
 let forceLoggedOut = false;
 
 function applySnapshot(snapshot) {
-  if (state.dropsTab !== 'global') state.dropsTab = 'global';
   if (window.dfSetLanguage && snapshot.language) window.dfSetLanguage(snapshot.language);
   // код устройства приходит в снимке — событий WebView может не быть
   if (snapshot?.device?.userCode) {
@@ -1781,41 +1732,6 @@ const actions = {
     state.page = Number(target.dataset.page) || 0;
     state.scrollTop = 0;
     render();
-  },
-  'drops-tab'(target) {
-    state.dropsTab = target.dataset.tab === 'local' ? 'local' : 'global';
-    state.query = '';
-    state.page = 0;
-    Promise.resolve(api.saveSettings?.({ dropsTab: state.dropsTab })).catch(() => {});
-    render();
-  },
-  async 'local-check'(form) {
-    if (typeof api.localCheckChannel !== 'function') {
-      toast('Локальные дропсы доступны в Tauri-сборке', 'error');
-      return;
-    }
-    const raw = form.querySelector('input[name="login"]')?.value?.trim() ?? '';
-    const login = raw
-      .replace(/^https?:\/\/(www\.)?twitch\.tv\//i, '')
-      .split(/[\/?#]/)[0]
-      .trim();
-    if (!login) return;
-    await withBusy('local', async () => {
-      const snapshot = await api.localCheckChannel(login);
-      if (snapshot?.error) {
-        toast(snapshot.error, 'error');
-        return;
-      }
-      applySnapshot(snapshot);
-      const check = snapshot.settings?.localCheck;
-      toast(check?.found ? `Найдено кампаний: ${check.found}` : 'Локальных дропсов сейчас нет', check?.found ? 'success' : 'error');
-    });
-  },
-  async 'local-clear'() {
-    if (typeof api.localClearChannel !== 'function') return;
-    await withBusy('local', async () => {
-      applySnapshot(await api.localClearChannel());
-    });
   },
   async 'legacy-launch'() {
     if (typeof api.legacyLaunch !== 'function') return;
@@ -2364,7 +2280,6 @@ async function boot() {
     const initial = await api.init();
     state.snapshot = initial;
     state.demo = Boolean(initial.demo);
-    state.dropsTab = initial.settings?.dropsTab === 'local' ? 'local' : 'global';
     applyDeepLink();
     if (params.get('preview') === 'code') {
       state.device = {
