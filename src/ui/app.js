@@ -1361,7 +1361,6 @@ function streaksView() {
   const delay = Number(streak.delayMaxMinutes ?? 7);
   const active = streak.active;
   const enabled = Boolean(streak.enabled);
-  const maxStreak = channels.reduce((best, item) => Math.max(best, Number(item.streak) || 0), 0);
 
   const card = (channel, compact) => {
     // канал без баллов канала: фарм и серия там невозможны — серая некликабельная карточка
@@ -1425,7 +1424,6 @@ function streaksView() {
         <div class="streak-metric"><b>${withStreak}</b><span>с серией</span></div>
         <div class="streak-metric"><b>${online}</b><span>в эфире</span></div>
         <div class="streak-metric"><b>${watched}<i>/${limit}</i></b><span>сегодня</span></div>
-        <div class="streak-metric"><b>${maxStreak}</b><span>лучшая серия</span></div>
       </div>
     </div>
     <div class="streak-hero-side">
@@ -1452,7 +1450,7 @@ function streaksView() {
       <button class="streak-stop" data-action="streak-stop" ${active ? '' : 'disabled'}>Стоп</button>
       ${active
         ? `<div class="streak-active"><span class="spinner"></span><span>Смотрю ${esc(active.login)}</span><em>${active.unlimited ? '∞' : `~${shortMinutes(active.minutes)} мин`}</em></div>`
-        : `<div class="streak-idle">${online ? `${online} ${online === 1 ? 'канал' : 'каналов'} в эфире` : 'Никто из подписок не в эфире'}</div>`}
+        : ''}
     </div>
   </div>
 

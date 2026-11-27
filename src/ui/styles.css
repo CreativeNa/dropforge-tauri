@@ -2329,14 +2329,6 @@ button {
   background: var(--accent);
 }
 
-.streak-idle {
-  padding: 10px 12px;
-  border: 1px dashed var(--line);
-  border-radius: 10px;
-  color: var(--muted);
-  font-size: 11.5px;
-  text-align: center;
-}
 
 .streak-active {
   display: flex;
