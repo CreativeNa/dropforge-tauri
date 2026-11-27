@@ -2691,14 +2691,7 @@ fn refresh_follows() -> Result<usize, String> {
         .get("excluded")
         .and_then(Value::as_array)
         .map(|items| items.iter().map(|item| text_of(Some(item)).to_lowercase()).collect())
-        .unwrap_or_else(|| {
-            vec![
-                "diloindys".to_string(),
-                "mersufy".to_string(),
-                "7tvapp".to_string(),
-                "ravenbtw".to_string(),
-            ]
-        });
+        .unwrap_or_default();
     for edge in edges {
         let Some(node) = edge.get("node") else { continue };
         let login = text_of(node.get("login"));
@@ -4946,7 +4939,7 @@ fn load_settings() -> Value {
                 "minMinutes": 9.2,
                 "maxMinutes": 20,
                 "delayMaxMinutes": 7,
-                "excluded": ["diloindys", "mersufy", "7tvapp", "ravenbtw"],
+                "excluded": [],
                 "claimChests": true
             }
         })
