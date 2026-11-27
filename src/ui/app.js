@@ -1269,6 +1269,7 @@ function streaksView() {
   const streak = state.snapshot.streak ?? {};
   const channels = (streak.channels ?? []).filter((channel) => channel && channel.login);
   const live = channels.filter((item) => item.live);
+  const watchable = live.filter((item) => item.pointsEnabled !== false);
   const online = live.length;
   const withStreak = channels.filter((item) => Number(item.streak) > 0).length;
   const watched = channels.filter((item) => item.watchedToday).length;
@@ -1281,6 +1282,17 @@ function streaksView() {
   const maxStreak = channels.reduce((best, item) => Math.max(best, Number(item.streak) || 0), 0);
 
   const card = (channel, compact) => {
+    // канал без баллов канала: фарм и серия там невозможны — серая некликабельная карточка
+    if (channel.pointsEnabled === false) {
+      return `
+      <div class="streak-card no-points${compact ? ' compact' : ''}" title="У канала нет баллов канала — фарм недоступен">
+        <div class="streak-avatar">
+          ${channel.avatar ? `<img src="${esc(channel.avatar)}" alt="" loading="lazy" onerror="this.remove()" />` : esc((channel.login ?? '?').slice(0, 1).toUpperCase())}
+        </div>
+        <div class="streak-nopoints-name">${esc(channel.login)}</div>
+        <div class="streak-nopoints-note">канал не имеет баллов канала<br />фарм недоступен</div>
+      </div>`;
+    }
     const streakValue = Number(channel.streak) > 0 ? channel.streak : null;
     const gained = channel.streakGainedAt
       && new Date(channel.streakGainedAt).toDateString() === new Date().toDateString();
@@ -1345,14 +1357,14 @@ function streaksView() {
         ${state.streakMenu ? `
           <div class="streak-menu">
             <div class="streak-menu-title">Смотреть без ограничения</div>
-            ${live.length
-              ? live.map((channel) => `
+            ${watchable.length
+              ? watchable.map((channel) => `
                 <button class="streak-menu-item" data-action="streak-watch" data-login="${esc(channel.login)}" data-id="${esc(channel.id)}" data-minutes="0">
                   <span class="streak-menu-avatar">${channel.avatar ? `<img src="${esc(channel.avatar)}" alt="" />` : esc((channel.login ?? '?').slice(0, 1).toUpperCase())}</span>
                   <span class="streak-menu-login">${esc(channel.login)}</span>
                   <span class="streak-menu-inf">∞</span>
                 </button>`).join('')
-              : '<div class="streak-menu-empty">Нет каналов в эфире</div>'}
+              : `<div class="streak-menu-empty">${live.length ? 'У каналов в эфире нет баллов канала' : 'Нет каналов в эфире'}</div>`}
           </div>` : ''}
       </div>
       <button class="streak-stop" data-action="streak-stop" ${active ? '' : 'disabled'}>Стоп</button>

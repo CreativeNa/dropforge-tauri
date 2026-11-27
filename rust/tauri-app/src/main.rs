@@ -2504,18 +2504,23 @@ fn streak_view() -> Value {
 }
 
 fn streak_gql(query: &str, variables: Value, token: &str) -> Option<Value> {
+    streak_gql_body(&json!({ "query": query, "variables": variables }), token)
+}
+
+/// Тот же запрос, но с готовым телом: нужно для persisted-запросов
+/// (operationName + extensions.persistedQuery), которые Twitch отдаёт только так.
+fn streak_gql_body(body: &Value, token: &str) -> Option<Value> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(std::time::Duration::from_secs(20)))
         .user_agent("Mozilla/5.0 DropForge/1.1")
         .build()
         .new_agent();
-    let body = json!({ "query": query, "variables": variables }).to_string();
     let request = agent
         .post("https://gql.twitch.tv/gql")
         .header("Client-Id", &auth_client_id())
         .header("Authorization", &format!("OAuth {token}"))
         .header("Content-Type", "application/json")
-        .send(body);
+        .send(body.to_string());
     let mut response = match request {
         Ok(response) => response,
         Err(_) => return None,
@@ -2630,6 +2635,9 @@ fn refresh_streak_live() {
     }
     data["liveCheckedAt"] = json!(chrono::Utc::now().to_rfc3339());
     save_streaks(&data);
+    drop(_guard);
+    // баллы канала: проверяем понемногу за тик, чтобы не задерживать обновление эфиров
+    refresh_streak_points(3);
 }
 
 fn refresh_follows() -> Result<usize, String> {
@@ -2713,6 +2721,8 @@ fn refresh_follows() -> Result<usize, String> {
             "live": previous.get("live").and_then(Value::as_bool).unwrap_or(false),
             "watchedToday": previous.get("watchedToday").and_then(Value::as_bool).unwrap_or(false),
             "lastWatchedAt": previous.get("lastWatchedAt").cloned().unwrap_or(Value::Null),
+            "pointsEnabled": previous.get("pointsEnabled").cloned().unwrap_or(Value::Null),
+            "pointsCheckedAt": previous.get("pointsCheckedAt").cloned().unwrap_or(Value::Null),
         }));
     }
     streak_reset_day(&mut data);
@@ -2727,6 +2737,8 @@ fn refresh_follows() -> Result<usize, String> {
     data["updatedAt"] = json!(chrono::Utc::now().to_rfc3339());
     save_streaks(&data);
     drop(streak_guard);
+    // новый список подписок: сразу дозаполняем флаг баллов у тех, кого ещё не проверяли
+    refresh_streak_points(25);
     log_info(format!("Стрик: подписки загружены ({})", channels_len(&data)));
     refresh_streak_live();
     Ok(channels_len(&data))
@@ -2817,6 +2829,116 @@ fn channel_points(token: &str, login: &str) -> Option<u64> {
         .and_then(|me| me.get("communityPoints"))
         .and_then(|points| points.get("balance"))
         .and_then(Value::as_u64)
+}
+
+/// Как часто перепроверять, есть ли у канала баллы: неделя.
+const STREAK_POINTS_TTL: i64 = 7 * 24 * 60 * 60;
+/// sha256 persisted-запроса ChannelPointsContext (тот же, что у веб-клиента Twitch).
+const CHANNEL_POINTS_HASH: &str = "1530a003a7d374b0380b79db0be0534f30ff46e61cffa2bc0e2468a909fbc024";
+
+/// Включена ли у канала программа баллов (channel points). Баллы бывают только у
+/// аффилиатов и партнёров: у начинающих каналов их нет, а вместе с ними нет и
+/// watch-серии — смотреть такой канал ради серии бессмысленно.
+fn channel_points_enabled(token: &str, login: &str) -> Option<bool> {
+    let body = json!({
+        "operationName": "ChannelPointsContext",
+        "variables": { "channelLogin": login },
+        "extensions": { "persistedQuery": { "version": 1, "sha256Hash": CHANNEL_POINTS_HASH } },
+    });
+    if let Some(response) = streak_gql_body(&body, token) {
+        if let Some(enabled) = response
+            .get("data")
+            .and_then(|data| data.get("community"))
+            .and_then(|community| community.get("channel"))
+            .and_then(|channel| channel.get("communityPointsSettings"))
+            .and_then(|settings| settings.get("isEnabled"))
+            .and_then(Value::as_bool)
+        {
+            return Some(enabled);
+        }
+    }
+    // резерв, если persisted-запрос не отдался: баллы доступны только аффилиатам/партнёрам
+    let response = streak_gql(
+        "query($login:String!){ user(login:$login){ roles { isAffiliate isPartner } } }",
+        json!({ "login": login }),
+        token,
+    )?;
+    let roles = response.get("data")?.get("user")?.get("roles")?;
+    let affiliate = roles.get("isAffiliate").and_then(Value::as_bool).unwrap_or(false);
+    let partner = roles.get("isPartner").and_then(Value::as_bool).unwrap_or(false);
+    Some(affiliate || partner)
+}
+
+fn streak_points_stale(item: &Value) -> bool {
+    if item.get("pointsEnabled").map(Value::is_null).unwrap_or(true) {
+        return true;
+    }
+    let checked = text_of(item.get("pointsCheckedAt"));
+    match chrono::DateTime::parse_from_rfc3339(&checked) {
+        Ok(at) => chrono::Utc::now().timestamp() - at.timestamp() >= STREAK_POINTS_TTL,
+        Err(_) => true,
+    }
+}
+
+/// Обновляет флаг «есть баллы канала» у каналов, где он протух (неделя) или не
+/// проверялся ни разу. limit — сколько каналов за проход: запросы последовательные.
+fn refresh_streak_points(limit: usize) {
+    let Some(token) = load_token() else { return };
+    let logins: Vec<String> = {
+        let _guard = STREAK_DATA.lock().unwrap();
+        let data = load_streaks();
+        data.get("channels")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter(|item| streak_points_stale(item))
+                    .map(|item| text_of(item.get("login")))
+                    .filter(|login| !login.is_empty())
+                    .take(limit)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    if logins.is_empty() {
+        return;
+    }
+    let mut updates: Vec<(String, bool)> = Vec::new();
+    for login in &logins {
+        if let Some(enabled) = channel_points_enabled(&token, login) {
+            log_info(format!(
+                "Стрик: баллы канала {login} — {}",
+                if enabled { "есть" } else { "нет, фарм недоступен" }
+            ));
+            updates.push((login.clone(), enabled));
+        }
+    }
+    if updates.is_empty() {
+        return;
+    }
+    let _guard = STREAK_DATA.lock().unwrap();
+    let mut data = load_streaks();
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Some(items) = data["channels"].as_array_mut() {
+        for item in items {
+            let login = text_of(item.get("login"));
+            if let Some((_, enabled)) = updates.iter().find(|(name, _)| name == &login) {
+                item["pointsEnabled"] = json!(*enabled);
+                item["pointsCheckedAt"] = json!(now);
+            }
+        }
+    }
+    save_streaks(&data);
+}
+
+/// Закэшированный флаг баллов канала: None — ещё не проверяли.
+fn streak_channel_points(login: &str) -> Option<bool> {
+    load_streaks()
+        .get("channels")
+        .and_then(Value::as_array)
+        .and_then(|items| items.iter().find(|item| text_of(item.get("login")) == login))
+        .and_then(|item| item.get("pointsEnabled"))
+        .and_then(Value::as_bool)
 }
 
 // вызывать под STREAK_DATA: startedAt последней открытой (без endedAt) сессии канала
@@ -3114,6 +3236,10 @@ fn start_chest_claimer(app: tauri::AppHandle) {
 }
 
 fn start_streak_watch(app: Option<tauri::AppHandle>, login: &str, channel_id: &str, seconds: u64) -> Value {
+    if streak_channel_points(login) == Some(false) {
+        log_warn(format!("Стрик: {login} без баллов канала — фарм недоступен"));
+        return json!({ "error": "у канала нет баллов канала — фарм недоступен" });
+    }
     if !STREAK_ACTIVE.lock().unwrap().is_null() {
         log_warn(format!("Стрик: запуск {login} отклонён — просмотр уже идёт"));
         return json!({ "error": "просмотр уже идёт" });
@@ -3263,6 +3389,7 @@ fn streak_candidates() -> Vec<Value> {
             items
                 .iter()
                 .filter(|item| item.get("live").and_then(Value::as_bool).unwrap_or(false))
+                .filter(|item| item.get("pointsEnabled").and_then(Value::as_bool) != Some(false))
                 .filter(|item| !item.get("watchedToday").and_then(Value::as_bool).unwrap_or(false))
                 .filter(|item| {
                     let broadcast = text_of(item.get("broadcastId"));
