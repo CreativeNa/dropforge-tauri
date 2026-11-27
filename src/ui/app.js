@@ -1353,8 +1353,7 @@ function streaksView() {
   const live = channels.filter((item) => item.live);
   const watchable = live.filter((item) => item.pointsEnabled !== false);
   const online = live.length;
-  const withStreak = channels.filter((item) => Number(item.streak) > 0).length;
-  const watched = channels.filter((item) => item.watchedToday).length;
+
   const limit = Number(streak.dailyLimit ?? 5);
   const min = Number(streak.minMinutes ?? 6);
   const max = Number(streak.maxMinutes ?? 20);
@@ -1420,11 +1419,7 @@ function streaksView() {
       <div class="streak-kicker">Watch Streak Keeper</div>
       <h2>Серии под контролем</h2>
       <p>Приложение заходит на живые каналы из подписок и смотрит их, пока фарм дропов стоит. Заход со случайной задержкой, просмотр ${min}–${max} минут.</p>
-      <div class="streak-metrics">
-        <div class="streak-metric"><b>${withStreak}</b><span>с серией</span></div>
-        <div class="streak-metric"><b>${online}</b><span>в эфире</span></div>
-        <div class="streak-metric"><b>${watched}<i>/${limit}</i></b><span>сегодня</span></div>
-      </div>
+
     </div>
     <div class="streak-hero-side">
       <div class="streak-power-wrap">
