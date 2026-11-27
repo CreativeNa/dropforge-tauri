@@ -332,6 +332,26 @@ fn reachable(url: &str) -> String {
     }
 }
 
+/// Отключает встроенные горячие клавиши WebView2 (Ctrl+F «найти», F3 и прочие
+/// браузерные акселераторы): в приложении они не нужны и перекрывают свои.
+#[cfg(windows)]
+fn disable_browser_accelerators(window: &tauri::WebviewWindow) {
+    let _ = window.with_webview(|webview| {
+        use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Settings3;
+        use windows_core::Interface;
+        unsafe {
+            let Ok(core) = webview.controller().CoreWebView2() else {
+                return;
+            };
+            let Ok(settings) = core.Settings() else { return };
+            let Ok(settings3) = settings.cast::<ICoreWebView2Settings3>() else {
+                return;
+            };
+            let _ = settings3.SetAreBrowserAcceleratorKeysEnabled(false);
+        }
+    });
+}
+
 #[tauri::command]
 fn diagnostics_report(app: tauri::AppHandle) -> Value {
     log_info("Диагностика: сбор отчёта");
@@ -5634,6 +5654,10 @@ fn main() {
                 std::process::exit(0);
             }
             log_info(format!("Запуск DropForge {APP_VERSION}, профиль: {}", mask_text(&profile_dir().display().to_string())));
+            #[cfg(windows)]
+            if let Some(window) = app.get_webview_window("main") {
+                disable_browser_accelerators(&window);
+            }
             legacy_cleanup();
             {
                 let handle = app.handle().clone();

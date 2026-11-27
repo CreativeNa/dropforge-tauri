@@ -2213,6 +2213,31 @@ document.addEventListener('input', (event) => {
 
 });
 
+/**
+ * WebView2 по Ctrl+F показывает встроенный поиск браузера — в приложении он лишний.
+ * Перехватываем сочетание в capture-фазе и вместо него фокусируем свой поиск по играм.
+ */
+document.addEventListener(
+  'keydown',
+  (event) => {
+    const wantsFind =
+      ((event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey && event.key.toLowerCase() === 'f') ||
+      event.key === 'F3';
+    if (!wantsFind) return;
+    event.preventDefault();
+    event.stopPropagation();
+    // не выдёргиваем фокус из поля, куда пользователь печатает
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return;
+    const search = document.querySelector('.search input');
+    if (search) {
+      search.focus();
+      search.select();
+    }
+  },
+  true,
+);
+
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && state.streakChannel) {
     closeStreakSheet();

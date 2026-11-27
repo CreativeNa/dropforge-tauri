@@ -16,6 +16,8 @@ sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_System_Memory", "Win32_System_DataExchange", "Win32_System_Ole", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry"] }
+webview2-com = "0.39"
+windows-core = "0.62"
 
 [profile.release]
 # incremental rebuild: an edit to one function does not recompile the whole crate
