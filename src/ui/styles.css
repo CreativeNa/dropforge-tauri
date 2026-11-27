@@ -2887,6 +2887,31 @@ button {
   border-top: 1px solid var(--line);
 }
 
+/* широкая карточка: окно под ней или над ней, хвостик сверху/снизу */
+.streak-pop.below::before,
+.streak-pop.above::before {
+  top: auto;
+  left: calc(var(--tail-x, 50%) - 5px);
+}
+
+.streak-pop.below::before {
+  top: -5px;
+  border-left: 1px solid var(--line);
+  border-bottom: 0;
+  border-top: 1px solid var(--line);
+  background: var(--panel-2);
+}
+
+.streak-pop.above::before {
+  bottom: -5px;
+  top: auto;
+  border-left: 0;
+  border-top: 0;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+}
+
 .streak-pop.open {
   animation: streak-pop-in 0.24s cubic-bezier(0.22, 0.9, 0.24, 1) both;
 }
@@ -2930,7 +2955,7 @@ button {
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
-  padding-right: 2px;
+  padding: 0 2px 9px 0;
 }
 
 .streak-pop-name {
@@ -2955,7 +2980,7 @@ button {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  margin: 8px 0 10px;
+  margin: 2px 0 10px;
 }
 
 .streak-pop-balance b {

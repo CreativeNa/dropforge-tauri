@@ -1177,10 +1177,9 @@ function streakPop() {
     }
     return Number(session.minutes) || 0;
   };
-  const status = channel.live ? 'В эфире' : channel.watchedToday ? 'Смотрел сегодня' : 'Офлайн';
+  const live = Boolean(channel.live);
   const points = state.streakPoints && state.streakPoints.login === channel.login ? state.streakPoints : null;
   const balance = points ? Number(points.balance) : null;
-  const balanceAt = points ? fmtTime(points.at) : '';
 
   const rows = sessions.map((session) => {
     const before = Number(session.pointsBefore);
@@ -1208,16 +1207,16 @@ function streakPop() {
   <aside class="streak-pop${state.streakClosing ? ' closing' : ' open'}" role="dialog" aria-label="Статистика ${esc(channel.login)}">
     <header class="streak-pop-head">
       <div class="streak-pop-name">${esc(channel.login)}</div>
-      <div class="streak-pop-status"><span class="streak-dot${channel.live ? '' : ' offline'}"></span>${status}</div>
+      ${live ? '<div class="streak-pop-status"><span class="streak-dot"></span>В эфире</div>' : ''}
     </header>
-    <div class="streak-pop-balance">
+    ${live ? `<div class="streak-pop-balance">
       <b>${balance === null ? '…' : balance.toLocaleString('ru-RU')}</b>
-      <span>${balance === null ? 'получаю баллы…' : `баллов на ${balanceAt}`}</span>
-    </div>
+      <span>баллов</span>
+    </div>` : ''}
     <div class="streak-pop-list">
       ${rows || '<div class="streak-pop-empty">Просмотров этого канала ещё не было. Запусти просмотр — здесь появятся время и прирост баллов.</div>'}
     </div>
-    <footer class="streak-pop-foot">${allSessions.length > sessions.length ? `Последние ${sessions.length} из ${allSessions.length} · прокрутка внутри окна` : `Записей: ${allSessions.length}`}</footer>
+    ${allSessions.length > sessions.length ? `<footer class="streak-pop-foot">Последние ${sessions.length} из ${allSessions.length} · прокрутка внутри окна</footer>` : ''}
   </aside>`;
 }
 
@@ -1234,14 +1233,33 @@ function positionStreakPop() {
   if (card) {
     const box = card.getBoundingClientRect();
     const gap = 16;
-    let left = box.right + gap;
-    let top = box.top + box.height / 2 - Math.min(height * 0.45, 150);
-    if (left + width > window.innerWidth - 16) left = box.left - width - gap;
-    if (left < 16) left = 16;
+    const fitsRight = box.right + gap + width <= window.innerWidth - 16;
+    const fitsLeft = box.left - gap - width >= 16;
+    let left = 0;
+    let top = 0;
+    if (!fitsRight && !fitsLeft) {
+      // широкая карточка (ряд «Сейчас в эфире»): окно встаёт под ней или над ней
+      const below = box.bottom + 14;
+      const useBelow = below + height <= window.innerHeight - 16 || box.top - height - 14 < 16;
+      top = useBelow ? below : box.top - height - 14;
+      left = Math.min(Math.max(box.left + 16, 16), window.innerWidth - width - 16);
+      pop.classList.remove('left');
+      pop.classList.toggle('below', useBelow);
+      pop.classList.toggle('above', !useBelow);
+      pop.style.transformOrigin = useBelow ? 'center top' : 'center bottom';
+      const tail = box.left + box.width / 2 - left;
+      pop.style.setProperty('--tail-x', `${Math.round(Math.max(20, Math.min(width - 20, tail)))}px`);
+      pop.style.left = `${Math.round(left)}px`;
+      pop.style.top = `${Math.round(top)}px`;
+      return;
+    }
+    left = fitsRight ? box.right + gap : box.left - gap - width;
+    top = box.top + box.height / 2 - Math.min(height * 0.45, 150);
     if (top + height > window.innerHeight - 16) top = window.innerHeight - height - 16;
     if (top < 16) top = 16;
-    const flipped = left < box.left;
+    const flipped = !fitsRight;
     pop.classList.toggle('left', flipped);
+    pop.classList.remove('below', 'above');
     pop.style.transformOrigin = flipped ? 'right center' : 'left center';
     const tail = box.top + box.height / 2 - top;
     pop.style.setProperty('--tail-y', `${Math.round(Math.max(20, Math.min(height - 20, tail)))}px`);
@@ -1260,8 +1278,40 @@ function stopStreakPointsTimer() {
   streakPointsTimer = null;
 }
 
+function streakChannelLive(login) {
+  const channels = state.snapshot?.streak?.channels ?? [];
+  return channels.some((item) => item.login === login && item.live);
+}
+
+/**
+ * Баллы имеет смысл спрашивать только у канала в эфире: у офлайна они не меняются.
+ * Вызывается после каждого рендера мини-окна и сама поднимает/гасит таймер.
+ */
+function syncStreakPoints() {
+  if (!state.streakChannel || state.streakClosing) return;
+  const login = state.streakChannel;
+  if (!streakChannelLive(login)) {
+    stopStreakPointsTimer();
+    state.streakPoints = null;
+    return;
+  }
+  if (streakPointsTimer) return;
+  loadStreakPoints(login);
+  streakPointsTimer = setInterval(() => {
+    if (!streakChannelLive(login) || state.streakChannel !== login) {
+      stopStreakPointsTimer();
+      return;
+    }
+    loadStreakPoints(login);
+  }, 30000);
+}
+
 async function loadStreakPoints(login) {
   if (typeof api?.streakPoints !== 'function') return;
+  if (!streakChannelLive(login)) {
+    stopStreakPointsTimer();
+    return;
+  }
   try {
     const result = await api.streakPoints(login);
     if (!result || result.error) return;
@@ -1295,8 +1345,6 @@ function openStreakPop(login) {
   state.streakClosing = false;
   state.streakPoints = null;
   render();
-  loadStreakPoints(login);
-  streakPointsTimer = setInterval(() => loadStreakPoints(login), 30000);
 }
 
 function streaksView() {
@@ -1672,7 +1720,10 @@ function render() {
 
   const streakListEl = document.querySelector('.streak-pop-list');
   if (streakListEl && streakListScroll) streakListEl.scrollTop = streakListScroll;
-  if (state.streakChannel) positionStreakPop();
+  if (state.streakChannel) {
+    positionStreakPop();
+    syncStreakPoints();
+  }
 
   for (const img of document.querySelectorAll('img[data-fallback]')) {
     img.addEventListener('error', () => img.remove(), { once: true });
