@@ -41,7 +41,7 @@
     streakRefresh: () => call('streak_refresh'),
     streakWatch: (login, channelId, minutes) => call('streak_watch', { login, channelId, minutes }),
     streakStop: () => call('streak_stop'),
-    streakPoints: (login) => call('streak_points', { login }),
+    streakPoints: (login, force) => call('streak_points', { login, force: Boolean(force) }),
     logsOpen: () => call('logs_open'),
     appLanguage: () => call('app_language'),
     localCheckChannel: (login) => call('local_check_channel', { login }),

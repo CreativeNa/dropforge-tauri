@@ -34,6 +34,16 @@
     return String(value ?? '').replace(/\s+/g, ' ').trim();
   }
 
+  /** Ветка помечена data-no-translate: строки внутри не переводятся никогда. */
+  function isProtected(node) {
+    let el = node && node.nodeType === 1 ? node : node && node.parentElement;
+    while (el && el.hasAttribute) {
+      if (el.hasAttribute('data-no-translate')) return true;
+      el = el.parentElement;
+    }
+    return false;
+  }
+
   const EN_NORM = new Map(Object.entries(EN).map(([key, value]) => [normalize(key), value]));
 
   let lang = 'ru';
@@ -67,6 +77,7 @@
   }
 
   function localizeAttributes(el) {
+    if (isProtected(el)) return;
     for (const name of ['placeholder', 'title', 'aria-label']) {
       const value = el.getAttribute?.(name);
       if (value && /[А-Яа-я]/.test(value)) {
@@ -80,6 +91,7 @@
     if (lang !== 'en' || !root) return;
     if (root.querySelectorAll) {
       for (const el of root.querySelectorAll('p,h1,h2,h3,li')) {
+        if (isProtected(el)) continue;
         if (!el.childElementCount) continue;
         const text = normalize(el.textContent);
         let translated = EN_NORM.get(text);
@@ -98,6 +110,7 @@
     for (const node of nodes) {
       const value = node.nodeValue;
       if (!value || !/[А-Яа-я]/.test(value)) continue;
+      if (isProtected(node)) continue;
       const translated = translateString(value);
       if (translated !== value) node.nodeValue = translated;
     }

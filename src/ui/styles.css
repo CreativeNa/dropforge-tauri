@@ -794,8 +794,8 @@ button {
 }
 
 .pin svg {
-  width: 13px;
-  height: 13px;
+  width: 15px;
+  height: 15px;
 }
 
 .pick {
@@ -3131,4 +3131,19 @@ body {
 .lang-btn.active {
   background: var(--accent, #f2766f);
   color: #1b1b1b;
+}
+
+.streak-local {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 5px;
+  vertical-align: middle;
+  color: var(--accent);
+  opacity: .9;
+}
+
+.streak-local svg {
+  width: 15px;
+  height: 15px;
 }

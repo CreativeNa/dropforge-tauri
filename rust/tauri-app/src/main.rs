@@ -2311,8 +2311,14 @@ fn start_pubsub_watchdog(app: tauri::AppHandle) {
 fn start_background(app: tauri::AppHandle) {
     std::thread::spawn(move || {
         let mut last_refresh = std::time::Instant::now() - std::time::Duration::from_secs(3600);
+        // суточный догон балансов: если старт стрима мы не поймали
+        let mut last_balance = std::time::Instant::now() - std::time::Duration::from_secs(86400);
         loop {
             std::thread::sleep(std::time::Duration::from_secs(30));
+            if last_balance.elapsed() >= std::time::Duration::from_secs(30 * 60) {
+                last_balance = std::time::Instant::now();
+                streak_touch_balances(2);
+            }
             let refresh_minutes = load_settings()
                 .get("refreshMinutes")
                 .and_then(Value::as_u64)
@@ -2511,7 +2517,46 @@ fn streak_reset_day(data: &mut Value) {
     }
 }
 
+static LOCAL_DROPS_RESTORED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Восстанавливает последние локальные кампании из журнала: PubSub-событие
+/// могло прийти до перезапуска приложения, и тогда ящик у канала терялся.
+fn restore_local_drops_from_logs() {
+    if LOCAL_DROPS_RESTORED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let Ok(text) = std::fs::read_to_string(log_file_path()) else {
+        return;
+    };
+    let mut seen = std::collections::HashSet::new();
+    for line in text.lines().rev() {
+        let Some(index) = line.find("[drop-progress]:") else {
+            continue;
+        };
+        let raw = line[index + "[drop-progress]:".len()..].trim();
+        let Ok(value) = serde_json::from_str::<Value>(raw) else {
+            continue;
+        };
+        let data = value.get("data").cloned().unwrap_or(Value::Null);
+        if data.get("is_sitewide").and_then(Value::as_bool).unwrap_or(false) {
+            continue;
+        }
+        let channel_id = text_of(data.get("channel_id"));
+        if channel_id.is_empty() || !seen.insert(channel_id.clone()) {
+            continue;
+        }
+        streak_mark_local_drop(
+            &channel_id,
+            &text_of(data.get("drop_id")),
+            data.get("current_progress_min").and_then(Value::as_f64).unwrap_or(0.0),
+            data.get("required_progress_min").and_then(Value::as_f64).unwrap_or(0.0),
+        );
+    }
+}
+
 fn streak_view() -> Value {
+    restore_local_drops_from_logs();
     let cfg = streak_cfg();
     let mut data = load_streaks();
     streak_reset_day(&mut data);
@@ -2737,6 +2782,10 @@ fn refresh_follows() -> Result<usize, String> {
             "lastWatchedAt": previous.get("lastWatchedAt").cloned().unwrap_or(Value::Null),
             "pointsEnabled": previous.get("pointsEnabled").cloned().unwrap_or(Value::Null),
             "pointsCheckedAt": previous.get("pointsCheckedAt").cloned().unwrap_or(Value::Null),
+            "localDrop": previous.get("localDrop").cloned().unwrap_or(Value::Null),
+            // история баланса переживает обновление подписок
+            "balance": previous.get("balance").cloned().unwrap_or(Value::Null),
+            "balanceAt": previous.get("balanceAt").cloned().unwrap_or(Value::Null),
         }));
     }
     streak_reset_day(&mut data);
@@ -2796,7 +2845,41 @@ fn streak_mark_live(channel_id: &str, live: bool) {
     }
 }
 
-/// Быстрая часть остановки: гасим вотчер и снимаем активную сессию.
+/// Локальная (канальная) кампания: PubSub присылает drop-progress только для
+/// не-sitewide дропов. Запоминаем её у канала, чтобы UI мог показать ящик.
+fn streak_mark_local_drop(channel_id: &str, drop_id: &str, current: f64, required: f64) {
+    if channel_id.is_empty() || drop_id.is_empty() {
+        return;
+    }
+    let _guard = STREAK_DATA.lock().unwrap();
+    let mut data = load_streaks();
+    let mut changed = false;
+    if let Some(items) = data["channels"].as_array_mut() {
+        for item in items {
+            if text_of(item.get("id")) == channel_id {
+                item["localDrop"] = json!({
+                    "dropId": drop_id,
+                    "current": current,
+                    "required": required,
+                    "at": chrono::Utc::now().to_rfc3339(),
+                });
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        save_streaks(&data);
+        let login = load_streaks()
+            .get("channels")
+            .and_then(Value::as_array)
+            .and_then(|items| items.iter().find(|item| text_of(item.get("id")) == channel_id))
+            .map(|item| text_of(item.get("login")))
+            .unwrap_or_default();
+        log_info(format!(
+            "Стрик: локальная кампания {login} — {current:.0}/{required:.0} мин"
+        ));
+    }
+}
 /// Возвращает (логин, баллы до) — сетевую часть делает вызывающий.
 fn stop_streak_fast() -> Option<(String, Option<u64>)> {
     {
@@ -2859,6 +2942,87 @@ fn streak_channel_balance(login: &str) -> Option<u64> {
         .and_then(|items| items.iter().find(|item| text_of(item.get("login")) == login))
         .and_then(|item| item.get("balance"))
         .and_then(Value::as_u64)
+}
+
+/// История баланса канала: сохраняем в streaks.json, чтобы мини-окно офлайн-канала
+/// брало баллы локально и не ходило в Twitch при каждом открытии.
+fn streak_save_balance(login: &str, balance: u64) {
+    if login.is_empty() {
+        return;
+    }
+    let _guard = STREAK_DATA.lock().unwrap();
+    let mut data = load_streaks();
+    let mut changed = false;
+    if let Some(items) = data["channels"].as_array_mut() {
+        for item in items {
+            if text_of(item.get("login")) == login {
+                item["balance"] = json!(balance);
+                item["balanceAt"] = json!(chrono::Utc::now().to_rfc3339());
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        save_streaks(&data);
+    }
+}
+
+/// Баланс офлайн-канала обновляем раз в сутки: строго в момент старта стрима
+/// (PubSub stream-up) или суточным догоном, если стрим мы не поймали.
+const STREAK_BALANCE_TTL: i64 = 24 * 60 * 60;
+
+fn streak_balance_stale(login: &str) -> bool {
+    let data = load_streaks();
+    let Some(item) = data
+        .get("channels")
+        .and_then(Value::as_array)
+        .and_then(|items| items.iter().find(|item| text_of(item.get("login")) == login))
+    else {
+        return false;
+    };
+    if item.get("balance").map(Value::is_null).unwrap_or(true) {
+        return true;
+    }
+    match chrono::DateTime::parse_from_rfc3339(&text_of(item.get("balanceAt"))) {
+        Ok(at) => chrono::Utc::now().timestamp() - at.timestamp() >= STREAK_BALANCE_TTL,
+        Err(_) => true,
+    }
+}
+
+/// Тянет баланс с Twitch и кладёт в историю. Возвращает актуальное значение.
+fn streak_refresh_balance(login: &str) -> Option<u64> {
+    if login.is_empty() {
+        return None;
+    }
+    // у канала без программы баллов истории не будет — не пишем туда нули
+    if streak_channel_points(login) == Some(false) {
+        return None;
+    }
+    let token = load_token()?;
+    let balance = channel_points_retry(&token, login)?;
+    streak_save_balance(login, balance);
+    log_info(format!("Стрик: баланс {login} обновлён — {balance}"));
+    Some(balance)
+}
+
+/// Суточный догон: обновляет историю баланса у каналов, где она протухла.
+/// По одному каналу за проход, чтобы не долбить Twitch пачкой.
+fn streak_touch_balances(limit: usize) {
+    let stale: Vec<String> = load_streaks()
+        .get("channels")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| text_of(item.get("login")))
+                .filter(|login| !login.is_empty() && streak_balance_stale(login))
+                .take(limit)
+                .collect()
+        })
+        .unwrap_or_default();
+    for login in stale {
+        streak_refresh_balance(&login);
+    }
 }
 
 /// Как часто перепроверять, есть ли у канала баллы: неделя.
@@ -3674,17 +3838,39 @@ fn streak_snapshot() -> Value {
 
 /// Баланс баллов канала «на текущую минуту» для мини-окна статистики.
 #[tauri::command]
-async fn streak_points(login: String) -> Value {
+async fn streak_points(login: String, force: Option<bool>) -> Value {
+    let force = force.unwrap_or(false);
     let login_for_points = login.clone();
     let outcome = tauri::async_runtime::spawn_blocking(move || {
+        // офлайн-канал: если история свежая — отдаём её и в сеть не идём
+        if !force && !streak_balance_stale(&login_for_points) {
+            if let Some(balance) = streak_channel_balance(&login_for_points) {
+                return Ok((balance, true));
+            }
+        }
         let token = load_token().ok_or_else(|| "нет входа в Twitch".to_string())?;
-        channel_points(&token, &login_for_points)
-            .ok_or_else(|| "не удалось получить баллы канала".to_string())
+        match channel_points_retry(&token, &login_for_points) {
+            Some(balance) => {
+                streak_save_balance(&login_for_points, balance);
+                Ok((balance, false))
+            }
+            // Twitch не ответил — показываем историю, если она есть
+            None => match streak_channel_balance(&login_for_points) {
+                Some(balance) => Ok((balance, true)),
+                None => Err("не удалось получить баллы канала".to_string()),
+            },
+        }
     })
     .await
     .unwrap_or_else(|_| Err("не удалось получить баллы канала".to_string()));
     match outcome {
-        Ok(balance) => json!({ "ok": true, "login": login, "balance": balance, "at": chrono::Utc::now().to_rfc3339() }),
+        Ok((balance, cached)) => json!({
+            "ok": true,
+            "login": login,
+            "balance": balance,
+            "cached": cached,
+            "at": chrono::Utc::now().to_rfc3339()
+        }),
         Err(error) => json!({ "login": login, "error": error }),
     }
 }
@@ -3797,6 +3983,21 @@ fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_i
                         if kind == "stream-up" {
                             streak_mark_live(channel_id, true);
                             push_log("info", format!("Стрик: канал {channel_id} в эфире"));
+                            // старт стрима — единственный момент, когда обновляем
+                            // историю баланса офлайн-канала
+                            let login_for_points = load_streaks()
+                                .get("channels")
+                                .and_then(Value::as_array)
+                                .and_then(|items| {
+                                    items.iter().find(|item| text_of(item.get("id")) == channel_id)
+                                })
+                                .map(|item| text_of(item.get("login")))
+                                .unwrap_or_default();
+                            if !login_for_points.is_empty() {
+                                std::thread::spawn(move || {
+                                    streak_refresh_balance(&login_for_points);
+                                });
+                            }
                             let _ = handle.emit("state", snapshot_from_profile());
                         } else if kind == "stream-down" {
                             streak_mark_live(channel_id, false);
@@ -3818,6 +4019,28 @@ fn start_pubsub(app: tauri::AppHandle, state: &MinerState, token: String, user_i
                         .ok()
                         .and_then(|value| value.get("type").and_then(Value::as_str).map(str::to_string))
                         .unwrap_or_default();
+                    if topic.starts_with("user-drop-events.") && kind == "drop-progress" {
+                        let parsed: Value =
+                            serde_json::from_str(&payload).unwrap_or(Value::Null);
+                        let data = parsed.get("data").cloned().unwrap_or(Value::Null);
+                        let sitewide = data
+                            .get("is_sitewide")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        if !sitewide {
+                            streak_mark_local_drop(
+                                &text_of(data.get("channel_id")),
+                                &text_of(data.get("drop_id")),
+                                data.get("current_progress_min")
+                                    .and_then(Value::as_f64)
+                                    .unwrap_or(0.0),
+                                data.get("required_progress_min")
+                                    .and_then(Value::as_f64)
+                                    .unwrap_or(0.0),
+                            );
+                            let _ = handle.emit("state", snapshot_from_profile());
+                        }
+                    }
                     if kind != "viewcount" {
                         log_info(format!("PubSub {topic} [{kind}]: {}", &payload[..payload.len().min(300)]));
                     }

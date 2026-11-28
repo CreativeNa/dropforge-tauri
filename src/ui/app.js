@@ -41,7 +41,8 @@ window.addEventListener('blur', finishSlider);
 
 const ICONS = {
   logo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v6"/><path d="M5 8h14l-1.5 12.5a2 2 0 0 1-2 1.5H8.5a2 2 0 0 1-2-1.5L5 8Z"/><path d="M9 12h6"/></svg>',
-  drops: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5 12 4l8 4.5v7L12 20l-8-4.5v-7Z"/><path d="M4 8.5 12 13l8-4.5M12 13v7"/></svg>',
+  drops: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><rect x="1.7" y="18.4" width="3.4" height="3" rx="0.7"/><rect x="6" y="18.4" width="3.4" height="3" rx="0.7"/><rect x="10.3" y="18.4" width="3.4" height="3" rx="0.7"/><rect x="14.6" y="18.4" width="3.4" height="3" rx="0.7"/><rect x="18.9" y="18.4" width="3.4" height="3" rx="0.7"/><rect x="3.85" y="14.5" width="3.4" height="3" rx="0.7"/><rect x="8.15" y="14.5" width="3.4" height="3" rx="0.7"/><rect x="12.45" y="14.5" width="3.4" height="3" rx="0.7"/><rect x="16.75" y="14.5" width="3.4" height="3" rx="0.7"/><rect x="5.55" y="10.6" width="3.4" height="3" rx="0.7"/><rect x="9.85" y="10.6" width="3.4" height="3" rx="0.7"/><rect x="14.15" y="10.6" width="3.4" height="3" rx="0.7"/><rect x="7.25" y="6.7" width="3.4" height="3" rx="0.7"/><rect x="11.55" y="6.7" width="3.4" height="3" rx="0.7"/><rect x="8.95" y="2.8" width="3.4" height="3" rx="0.7"/></svg>',
+  localDrop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8.5 12 4l8 4.5v7L12 20l-8-4.5v-7Z"/><path d="M4 8.5 12 13l8-4.5M12 13v7"/></svg>',
   log: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4h11l3 3v13H5z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>',
   gear: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.9 1.2 2 2 0 1 1-4 0 1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3 15a2 2 0 1 1 0-4 1.7 1.7 0 0 0 1.4-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 4a2 2 0 1 1 4 0 1.7 1.7 0 0 0 2.9 1.4l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1A1.7 1.7 0 0 0 21 11a2 2 0 1 1 0 4Z"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
@@ -408,7 +409,7 @@ function authScreen() {
         <div class="brand-mark">${ICONS.logo}</div>
         <div class="brand-text">
           <span class="brand-name">DropForge</span>
-          <span class="brand-sub">Twitch Drops automation</span>
+          <span class="brand-sub">Автофарм дропов Twitch</span>
         </div>
       </div>
       <h1 class="auth-title">Дропы копятся, <em>пока вы заняты</em> другими делами</h1>
@@ -579,13 +580,12 @@ function sidebar() {
       <div class="brand-mark">${ICONS.logo}</div>
       <div class="brand-text">
         <span class="brand-name">DropForge</span>
-        <span class="brand-sub">Twitch Drops</span>
       </div>
     </div>
 
     <nav class="nav">
       <button class="nav-item ${state.view === 'drops' ? 'active' : ''}" data-action="nav" data-view="drops">
-        ${ICONS.drops} Дропы ${stats.claimable ? `<span class="nav-badge">${stats.claimable}</span>` : ''}
+        ${ICONS.drops} <span data-no-translate>Drops</span> ${stats.claimable ? `<span class="nav-badge">${stats.claimable}</span>` : ''}
       </button>
       <button class="nav-item ${state.view === 'badges' ? 'active' : ''}" data-action="nav" data-view="badges">
         ${ICONS.gift} Бейджи ${badgesFree ? `<span class="nav-badge">${badgesFree}</span>` : ''}
@@ -625,7 +625,7 @@ function topbar() {
   const snapshot = state.snapshot;
   const title =
     state.view === 'drops'
-      ? 'Дропы'
+      ? 'Игры с Drops'
       : state.view === 'badges'
         ? 'Бейджи'
         : state.view === 'streaks'
@@ -637,7 +637,7 @@ function topbar() {
     state.view === 'streaks'
       ? 'Серии просмотра каналов из подписок'
       : state.view === 'drops'
-      ? `${snapshot.stats.games} игр · ${snapshot.stats.campaigns} кампаний · ${snapshot.stats.drops} дропов`
+      ? '\u00a0'
       : state.view === 'badges'
         ? `Значки профиля Twitch · ${(snapshot.badges ?? []).filter((badge) => badge.claimed).length} из ${(snapshot.badges ?? []).length} получено`
         : state.view === 'logs'
@@ -770,8 +770,7 @@ function gamesSection() {
 
   return `
   <div class="section-head">
-    <h2 class="section-title">Игры с дропами</h2>
-    <span class="section-hint" id="games-hint">${visible} ${visible === 1 ? 'игра' : 'игр'} · нажмите на карточку, чтобы увидеть награды</span>
+    <span class="section-hint" id="games-hint">нажмите на карточку, чтобы увидеть награды</span>
   </div>
 
   <div class="games-grid" id="games-grid" ${visible ? '' : 'hidden'}>${cards}</div>
@@ -1303,29 +1302,29 @@ function syncStreakPoints() {
   if (!state.streakChannel || state.streakClosing) return;
   const login = state.streakChannel;
   if (!streakChannelLive(login)) {
-    // у офлайна баланс не меняется: спрашиваем один раз на открытое окно
+    // у офлайна баланс берём из истории: в сеть идём только если её ещё нет
     stopStreakPointsTimer();
     if (!(state.streakPoints && state.streakPoints.login === login) && state.streakPointsTried !== login) {
-      loadStreakPoints(login);
+      loadStreakPoints(login, false);
     }
     return;
   }
   if (streakPointsTimer) return;
-  loadStreakPoints(login);
+  loadStreakPoints(login, true);
   streakPointsTimer = setInterval(() => {
     if (!streakChannelLive(login) || state.streakChannel !== login) {
       stopStreakPointsTimer();
       return;
     }
-    loadStreakPoints(login);
-  }, 30000);
+    loadStreakPoints(login, true);
+  }, 300000);
 }
 
-async function loadStreakPoints(login) {
+async function loadStreakPoints(login, force = false) {
   if (typeof api?.streakPoints !== 'function') return;
   state.streakPointsTried = login;
   try {
-    const result = await api.streakPoints(login);
+    const result = await api.streakPoints(login, force);
     if (!result || result.error) return;
     if (state.streakChannel !== login || state.streakClosing) return;
     state.streakPoints = { login, balance: Number(result.balance) || 0, at: result.at ?? null };
@@ -1375,6 +1374,15 @@ function streaksView() {
   const active = streak.active;
   const enabled = Boolean(streak.enabled);
 
+  const localCampaignLogins = new Set(
+    (state.snapshot?.campaigns ?? [])
+      .filter((campaign) => campaign.local && campaign.channel?.login)
+      .map((campaign) => String(campaign.channel.login).toLowerCase())
+  );
+  const hasLocalDrop = (channel) =>
+    Boolean(channel.live) &&
+    (Boolean(channel.localDrop) || localCampaignLogins.has(String(channel.login).toLowerCase()));
+
   const card = (channel, compact) => {
     // канал без баллов канала: фарм и серия там невозможны — серая некликабельная карточка
     if (channel.pointsEnabled === false) {
@@ -1409,7 +1417,7 @@ function streaksView() {
         </div>
         <div class="streak-info">
           <div class="streak-name">${esc(channel.login)}${channel.live ? '<span class="streak-dot"></span>' : ''}</div>
-          <div class="streak-status">${status}${channel.watchedToday && channel.live ? ' · отмечен' : ''}</div>
+          <div class="streak-status">${status}${hasLocalDrop(channel) ? ` <span class="streak-local" title="Доступны локальные Drops">${ICONS.localDrop}</span>` : ''}${channel.watchedToday && channel.live ? ' · отмечен' : ''}</div>
         </div>
         <div class="streak-days${streakValue ? '' : ' no-value'}" ${streakValue ? '' : 'title="Активной серии нет"'}>
           <b>${streakValue ?? '—'}</b>
@@ -1430,7 +1438,6 @@ function streaksView() {
   return `
   <div class="streak-hero">
     <div class="streak-hero-main">
-      <div class="streak-kicker">Watch Streak Keeper</div>
       <h2>Серии под контролем</h2>
       <p>Приложение заходит на живые каналы из подписок и смотрит их, пока фарм дропов стоит. Заход со случайной задержкой, просмотр ${min}–${max} минут.</p>
 
@@ -2300,7 +2307,7 @@ document.addEventListener('input', (event) => {
 
     const hint = document.getElementById('games-hint');
     if (hint) {
-      hint.textContent = `${visible} ${visible === 1 ? 'игра' : 'игр'} · нажмите на карточку, чтобы увидеть награды`;
+      hint.textContent = 'нажмите на карточку, чтобы увидеть награды';
     }
     const grid = document.getElementById('games-grid');
     const empty = document.getElementById('games-empty');
