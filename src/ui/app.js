@@ -1374,14 +1374,9 @@ function streaksView() {
   const active = streak.active;
   const enabled = Boolean(streak.enabled);
 
-  const localCampaignLogins = new Set(
-    (state.snapshot?.campaigns ?? [])
-      .filter((campaign) => campaign.local && campaign.channel?.login)
-      .map((campaign) => String(campaign.channel.login).toLowerCase())
-  );
-  const hasLocalDrop = (channel) =>
-    Boolean(channel.live) &&
-    (Boolean(channel.localDrop) || localCampaignLogins.has(String(channel.login).toLowerCase()));
+  // значок только по данным PubSub: бэкенд уже отфильтровал дропы
+  // глобальных кампаний, а каталог для этого не годится
+  const hasLocalDrop = (channel) => Boolean(channel.live) && Boolean(channel.localDrop);
 
   const card = (channel, compact) => {
     // канал без баллов канала: фарм и серия там невозможны — серая некликабельная карточка

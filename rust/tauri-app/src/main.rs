@@ -2110,6 +2110,10 @@ struct MinerState {
 struct TrayHolder(Mutex<Option<tauri::tray::TrayIcon>>);
 
 static GAMES: Mutex<Vec<String>> = Mutex::new(Vec::new());
+/// id дропов, которые принадлежат глобальным кампаниям: по ним отличаем
+/// настоящую локальную кампанию канала от обычного дропа.
+static GLOBAL_DROPS: Mutex<Option<(std::time::Instant, std::collections::HashSet<String>)>> =
+    Mutex::new(None);
 static GAME_INDEX: Mutex<usize> = Mutex::new(0);
 static STOPPING: Mutex<bool> = Mutex::new(false);
 static WATCH_GEN: Mutex<u64> = Mutex::new(0);
@@ -2526,6 +2530,7 @@ fn restore_local_drops_from_logs() {
     if LOCAL_DROPS_RESTORED.swap(true, std::sync::atomic::Ordering::Relaxed) {
         return;
     }
+    prune_local_drops();
     let Ok(text) = std::fs::read_to_string(log_file_path()) else {
         return;
     };
@@ -2845,10 +2850,97 @@ fn streak_mark_live(channel_id: &str, live: bool) {
     }
 }
 
+/// Все id дропов, которые встречаются в глобальных кампаниях: прогресс из
+/// инвентаря плюс кэш каталога. Набор пересобирается раз в 10 минут.
+fn collect_global_drop_ids() -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    if let Some(progress) = read_json(progress_path()) {
+        if let Some(drops) = progress.get("drops").and_then(Value::as_object) {
+            for id in drops.keys() {
+                set.insert(id.clone());
+            }
+        }
+    }
+    if let Some(cache) = read_json(profile_dir().join("catalog-cache.json")) {
+        if let Some(campaigns) = cache.get("campaigns").and_then(Value::as_array) {
+            for campaign in campaigns {
+                for drop in campaign
+                    .get("timeBasedDrops")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default()
+                {
+                    let id = text_of(drop.get("id"));
+                    if !id.is_empty() {
+                        set.insert(id);
+                    }
+                }
+            }
+        }
+    }
+    set
+}
+
+/// Дроп принадлежит глобальной кампании? `is_sitewide` тут не помощник: у
+/// кампаний с ограничением по каналам он тоже false.
+fn known_global_drop(drop_id: &str) -> bool {
+    if drop_id.is_empty() {
+        return false;
+    }
+    let mut guard = GLOBAL_DROPS.lock().unwrap();
+    let stale = guard
+        .as_ref()
+        .map(|(at, _)| at.elapsed() > std::time::Duration::from_secs(600))
+        .unwrap_or(true);
+    if stale {
+        *guard = Some((std::time::Instant::now(), collect_global_drop_ids()));
+    }
+    guard
+        .as_ref()
+        .map(|(_, set)| set.contains(drop_id))
+        .unwrap_or(false)
+}
+
+/// Выкидывает ложные локальные кампании, которые могли записаться раньше.
+fn prune_local_drops() {
+    let logins: Vec<String> = {
+        let _guard = STREAK_DATA.lock().unwrap();
+        let mut data = load_streaks();
+        let mut changed = false;
+        let mut removed = Vec::new();
+        if let Some(items) = data["channels"].as_array_mut() {
+            for item in items {
+                let local = item.get("localDrop").cloned().unwrap_or(Value::Null);
+                if local.is_null() {
+                    continue;
+                }
+                if known_global_drop(&text_of(local.get("dropId"))) {
+                    item["localDrop"] = Value::Null;
+                    changed = true;
+                    removed.push(text_of(item.get("login")));
+                }
+            }
+        }
+        if changed {
+            save_streaks(&data);
+        }
+        removed
+    };
+    for login in logins {
+        log_info(format!(
+            "Стрик: {login} — это глобальный дроп, значок локальной кампании убран"
+        ));
+    }
+}
+
 /// Локальная (канальная) кампания: PubSub присылает drop-progress только для
 /// не-sitewide дропов. Запоминаем её у канала, чтобы UI мог показать ящик.
 fn streak_mark_local_drop(channel_id: &str, drop_id: &str, current: f64, required: f64) {
     if channel_id.is_empty() || drop_id.is_empty() {
+        return;
+    }
+    // дроп из глобальной кампании — это не локальная кампания канала
+    if known_global_drop(drop_id) {
         return;
     }
     let _guard = STREAK_DATA.lock().unwrap();
